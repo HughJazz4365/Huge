@@ -1,0 +1,14 @@
+.{
+    .name = .Huge,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.15.1",
+    .paths = .{""},
+    .dependencies = .{
+        .hgsl = .{ .path = "../Huge-sl" },
+        .zglfw = .{
+            .url = "git+https://github.com/HughJazz4365/zglfw#a17d85ea57520a1542dcea474771ba55f305e09b",
+            .hash = "zglfw-0.10.0-dev-zgVDNDVvIgCvcfVlhUJW0raBmELJiQwpOilGKmMiL4Ya",
+        },
+    },
+    .fingerprint = 0x3aba6dc2f8b8bf88,
+}
