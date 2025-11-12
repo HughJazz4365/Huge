@@ -2,5 +2,6 @@ const root = @import("../../root.zig");
 const gpu = root.gpu;
 
 pub const vulkanBackend: gpu.Backend = .{
-    .gpu_api = .vulkan,
+    .api = .vulkan,
+    .api_version = .{ .major = 1, .minor = 4 },
 };

@@ -1,6 +1,6 @@
 const std = @import("std");
 const huge = @import("root.zig");
-const glfw = @import("glfw");
+pub const glfw = @import("glfw");
 const math = huge.math;
 const util = huge.util;
 const Window = @This();
@@ -15,7 +15,7 @@ pub const FullHD: math.uvec2 = .{ 1920, 1080 };
 pub const HD: math.uvec2 = .{ 1280, 720 };
 
 pub fn frameEnd(self: Window) void {
-    if (huge.gpu.currentGApi() == .opengl) glfw.swapBuffers(self.handle);
+    if (huge.gpu.backend.api == .opengl) glfw.swapBuffers(self.handle);
 }
 pub fn shouldClosePoll(self: Window) bool {
     const should = self.shouldClose();
@@ -28,7 +28,7 @@ pub fn shouldClose(self: Window) bool {
 pub const pollEvents = glfw.pollEvents;
 
 pub fn create(attributes: Attributes) Error!Window {
-    if (huge.gpu.currentGApi() == .opengl) {
+    if (huge.gpu.backend.api == .opengl) {
         glfw.windowHint(glfw.ClientAPI, glfw.OpenGLAPI);
         glfw.windowHint(glfw.ContextVersionMajor, 4);
         glfw.windowHint(glfw.ContextVersionMinor, 3);
@@ -47,7 +47,7 @@ pub fn create(attributes: Attributes) Error!Window {
             null,
         ),
     };
-    if (huge.gpu.currentGApi() == .opengl) glfw.makeContextCurrent(window.handle);
+    if (huge.gpu.backend.api == .opengl) glfw.makeContextCurrent(window.handle);
     window.setAttributes(attributes);
 
     return window;
