@@ -84,9 +84,33 @@ fn getAttributes(self: Window) Attributes {
         .focused = glfw.getWindowAttrib(self.handle, glfw.Focused),
     };
 }
+pub fn createDummy(instance: glfw.VkInstance) !DummyWindow {
+    glfw.windowHint(glfw.Decorated, @intFromBool(false));
+    glfw.windowHint(glfw.Visible, @intFromBool(false));
+    glfw.windowHint(glfw.Focused, @intFromBool(false));
+
+    defer defaultWindowHints();
+
+    const window_handle = try glfw.createWindow(1, 1, "", null, null);
+
+    var surface_handle: glfw.VkSurfaceKHR = undefined;
+    const result = glfw.createWindowSurface(
+        instance,
+        window_handle,
+        null,
+        &surface_handle,
+    );
+    if (result != .success) return error.SurfaceCreationFailure;
+
+    return .{ .handle = window_handle, .surface_handle = surface_handle };
+}
+pub const DummyWindow = struct { handle: *glfw.Window, surface_handle: glfw.VkSurfaceKHR };
 pub fn init() !void {
     glfw.terminate();
     try glfw.init();
+    defaultWindowHints();
+}
+fn defaultWindowHints() void {
     glfw.windowHint(glfw.ClientAPI, glfw.NoAPI);
     glfw.windowHint(glfw.Resizable, @intFromBool(false));
     glfw.windowHint(glfw.Floating, @intFromBool(false));
