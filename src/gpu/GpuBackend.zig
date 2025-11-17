@@ -12,12 +12,15 @@ createPipeline: CreatePipelineFn = undefined,
 setPipelineProperty: SetPipelinePropertyFn = undefined,
 getDefaultPipeline: GetDefaultPipelineFn = undefined,
 
-createShaderModule: CreateShaderModuleFn = undefined,
-createShaderModuleRaw: CreateShaderModuleRawFn = undefined,
+createShaderModulePath: CreateShaderModulePathFn = undefined,
+createShaderModuleSource: CreateShaderModuleSourceFn = undefined,
 
+createWindowContext: CreateWindowContextFn = undefined,
+
+pub const CreateWindowContextFn = *const fn (huge.Window) Error!gpu.WindowContext;
 pub const CreatePipelineFn = *const fn ([]const ShaderModule) Error!Pipeline;
-pub const CreateShaderModuleFn = *const fn (path: []const u8, entry_point: []const u8) Error!ShaderModule;
-pub const CreateShaderModuleRawFn = *const fn (source: []const u8, entry_point: []const u8) Error!ShaderModule;
+pub const CreateShaderModulePathFn = *const fn (path: []const u8, entry_point: []const u8) Error!ShaderModule;
+pub const CreateShaderModuleSourceFn = *const fn (source: []const u8, entry_point: []const u8) Error!ShaderModule;
 pub const SetPipelinePropertyFn = *const fn (Pipeline, []const u8, *const anyopaque) Error!void;
 pub const GetDefaultPipelineFn = *const fn (gpu.PipelineType) Pipeline;
 

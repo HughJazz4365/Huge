@@ -1,0 +1,6 @@
+const vert = entrypoint(.vertex){}
+
+const frag = entrypoint(.fragment){
+	push color: vec3, out o: vec4 = ,.{color, 1}
+}
+

@@ -1,3 +1,0 @@
-const vert = entrypoint(.vertex){}
-
-const frag = entrypoint(.fragment){}

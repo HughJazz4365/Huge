@@ -3,10 +3,15 @@ const huge = @import("../root.zig");
 pub const hgsl = @import("hgsl");
 pub const Backend = @import("GpuBackend.zig");
 
-pub var backend: Backend = undefined; //default to software renderer??
+var backend: Backend = undefined; //default to software renderer??
 
 pub const Error = error{
+    OutOfMemory,
+
+    WindowContextCreationError,
     BackendInitializationFailure,
+
+    ShaderCompilationError,
 };
 pub fn init() Error!void {
     backend = @import("vulkan/vulkanBackend.zig").initBackend() catch
@@ -14,6 +19,15 @@ pub fn init() Error!void {
 }
 pub fn deinit() void {
     backend.deinit();
+}
+pub inline fn api() GApi {
+    return backend.api;
+}
+pub inline fn apiVersion() huge.Version {
+    return backend.api_version;
+}
+pub fn createWindowContext(window: huge.Window) Error!WindowContext {
+    return try backend.createWindowContext(window);
 }
 
 pub const Pipeline = enum(u32) {
@@ -54,12 +68,15 @@ pub const Feature = enum {
 };
 pub const FeatureSet = huge.util.StructFromEnum(Feature, bool, false, .@"packed");
 
-pub const ShaderModule = enum(u32) { _ };
+pub const ShaderModule = enum(Handle) { _ };
 pub const ShaderStage = hgsl.Parser.ShaderStage;
 
-pub const Buffer = enum(u32) { _ };
-pub const CommandBuffer = enum(u32) { _ };
-pub const Texture = enum(u32) { _ };
+pub const Buffer = enum(Handle) { _ };
+pub const CommandBuffer = enum(Handle) { _ };
+pub const Texture = enum(Handle) { _ };
+
+pub const WindowContext = enum(Handle) { _ };
+pub const Handle = u32;
 
 pub const GApi = enum { vulkan, opengl, none };
-const u32m = ~@as(u32, 0);
+const max_handle = ~@as(Handle, 0);

@@ -5,7 +5,7 @@ const util = huge.util;
 const gpu = huge.gpu;
 const hgsl = gpu.hgsl;
 
-const vk = @import("vk.zig");
+pub const vk = @import("vk.zig");
 
 //=====|constants|======
 
@@ -30,20 +30,71 @@ var device: vk.DeviceProxy = undefined;
 pub var bwp: vk.BaseWrapper = undefined;
 pub var iwp: vk.InstanceWrapper = undefined;
 pub var dwp: vk.DeviceWrapper = undefined;
-// var queues: [queue_type_count]vk.Queue = undefined;
-//
+var queues: [queue_type_count]vk.Queue = @splat(.null_handle);
+
 inline fn pd() PhysicalDevice {
     return physical_devices[current_physical_device_index];
 }
 
+// var arena: std.heap.ArenaAllocator = un
 var shader_compiler: hgsl.Compiler = undefined;
+// var pipelines: List(VKPipeline) = .empty;
 
+var shader_module_list: List(VKShaderModule) = .empty;
+var pipeline_list: List(VKPipeline) = .empty;
+
+var window_context_first: VKWindowContext = undefined;
+var window_context_list: List(VKWindowContext) = .empty;
+var window_context_count: u32 = 0;
 //======|methods|========
 
 fn createPipeline(stages: []const gpu.ShaderModule) Error!Pipeline {
     _ = stages;
     return @enumFromInt(0);
 }
+fn createWindowContext(window: huge.Window) Error!gpu.WindowContext {
+    const wc = try VKWindowContext.create(window);
+    if (window_context_count == 0) {
+        window_context_first = wc;
+        return @enumFromInt(0);
+    } else {
+        @panic("VK multiple window contexts");
+    }
+}
+
+//===|implementations|===
+const VKWindowContext = @import("vulkanWindowContext.zig");
+
+const VKShaderModule = struct {
+    vk_handle: vk.ShaderModule = .null_handle,
+    stage: gpu.ShaderStage,
+
+    push_constant_mappings: []const hgsl.PushConstantMapping,
+    opaque_uniform_mappings: []const hgsl.OpaqueUniformMapping,
+    pub fn createPath(path: []const u8, entry_point: []const u8) Error!ShaderModule {
+        _ = .{ path, entry_point };
+        // const result = shader_compiler.compileFile(path);
+    }
+    pub fn createSource(source: []const u8, entry_point: []const u8) Error!ShaderModule {
+        if (true) @panic("VKShaderModule.createRaw");
+        return try createPath(source, entry_point);
+    }
+
+    pub fn get(handle: ShaderModule) *VKShaderModule {
+        return shader_module_list[@intFromEnum(handle)];
+    }
+};
+//handle array with functions that have explicit
+//(offset and size) or (binding) args on top of 'name'
+const VKPipeline = struct {
+    //descriptor_set
+    //stages
+    //pc mapping, uniform mapping(just concat from stages
+    // and dont care about repeating names)
+    pub fn get(handle: Pipeline) *VKPipeline {
+        return pipeline_list[@intFromEnum(handle)];
+    }
+};
 
 //===|initialization|====
 
@@ -366,14 +417,6 @@ pub const minimal_required_queue_family_config: QueueConfiguration = .{
 pub const QueueType = enum(u8) { graphics, presentation, compute, transfer, sparse_binding, protected, video_decode, video_encode, optical_flow };
 
 //=======================
-fn versionBackend(version: Version) gpu.Backend {
-    return .{
-        .api = .vulkan,
-        .api_version = version,
-        .deinit = &deinit,
-        .createPipeline = &createPipeline,
-    };
-}
 pub const loader = &struct {
     pub fn l(i: vk.Instance, name: [*:0]const u8) ?glfw.VKproc {
         return glfw.getInstanceProcAddress(@intFromEnum(i), name);
@@ -403,5 +446,16 @@ const VKError = error{
 const glfw = huge.Window.glfw;
 const Error = gpu.Error;
 const Pipeline = gpu.Pipeline;
+const ShaderModule = gpu.ShaderModule;
 const Version = huge.Version;
 const Allocator = std.mem.Allocator;
+const List = std.ArrayList;
+fn versionBackend(version: Version) gpu.Backend {
+    return .{
+        .api = .vulkan,
+        .api_version = version,
+        .deinit = &deinit,
+        .createPipeline = &createPipeline,
+        .createWindowContext = &createWindowContext,
+    };
+}

@@ -6,10 +6,14 @@ const util = huge.util;
 const Window = @This();
 
 pub const Handle = *glfw.Window;
-pub const Error = glfw.GLFWError;
+pub const Error = error{
+    ContextCreationError,
+} || glfw.GLFWError;
 
 handle: Handle = undefined,
 title: [:0]const u8,
+
+context: huge.gpu.WindowContext = undefined,
 
 pub const FullHD: math.uvec2 = .{ 1920, 1080 };
 pub const HD: math.uvec2 = .{ 1280, 720 };
@@ -28,7 +32,7 @@ pub fn shouldClose(self: Window) bool {
 pub const pollEvents = glfw.pollEvents;
 
 pub fn create(attributes: Attributes) Error!Window {
-    if (huge.gpu.backend.api == .opengl) {
+    if (huge.gpu.api() == .opengl) {
         glfw.windowHint(glfw.ClientAPI, glfw.OpenGLAPI);
         glfw.windowHint(glfw.ContextVersionMajor, 4);
         glfw.windowHint(glfw.ContextVersionMinor, 3);
@@ -37,7 +41,7 @@ pub fn create(attributes: Attributes) Error!Window {
         glfw.windowHint(glfw.Doublebuffer, @intFromBool(true));
     } else glfw.windowHint(glfw.ClientAPI, glfw.NoAPI);
 
-    const window: Window = .{
+    var window: Window = .{
         .title = attributes.title,
         .handle = try glfw.createWindow(
             @intCast(attributes.size[0]),
@@ -47,8 +51,10 @@ pub fn create(attributes: Attributes) Error!Window {
             null,
         ),
     };
-    if (huge.gpu.backend.api == .opengl) glfw.makeContextCurrent(window.handle);
+    if (huge.gpu.api() == .opengl) glfw.makeContextCurrent(window.handle);
     window.setAttributes(attributes);
+    window.context = huge.gpu.createWindowContext(window) catch
+        return Error.ContextCreationError;
 
     return window;
 }

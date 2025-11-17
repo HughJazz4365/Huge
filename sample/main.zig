@@ -7,8 +7,8 @@ pub fn main() !void {
     defer huge.deinit();
 
     const m = try gpu.Pipeline.create(.surface, &.{
-        .{ .path = "test.hgsl", .entry_point = "vert" },
-        .{ .path = "test.hgsl", .entry_point = "frag" },
+        .{ .path = "shader.hgsl", .entry_point = "vert" },
+        .{ .path = "shader.hgsl", .entry_point = "frag" },
     });
     _ = m;
     var window = try huge.Window.create(.{ .title = "sample#0", .size = huge.Window.HD });
