@@ -5,20 +5,19 @@ pub const Backend = @import("GpuBackend.zig");
 
 var backend: Backend = undefined; //default to software renderer??
 
-pub const Error = error{
-    OutOfMemory,
+//=======|methods|=======
 
-    WindowContextCreationError,
-    BackendInitializationFailure,
-
-    ShaderCompilationError,
-};
-pub fn init() Error!void {
-    backend = @import("vulkan/vulkanBackend.zig").initBackend() catch
-        return Error.BackendInitializationFailure;
+pub fn getWindowRenderTarget(window: huge.Window) RenderTarget {
+    return backend.getWindowRenderTarget(window);
 }
-pub fn deinit() void {
-    backend.deinit();
+pub fn createWindowContext(window: huge.Window) Error!WindowContext {
+    return try backend.createWindowContext(window);
+}
+pub fn destroyWindowContext(window_context: WindowContext) void {
+    backend.destroyWindowContext(window_context);
+}
+pub fn present(window: huge.Window) Error!void {
+    try backend.present(window);
 }
 pub inline fn api() GApi {
     return backend.api;
@@ -26,16 +25,21 @@ pub inline fn api() GApi {
 pub inline fn apiVersion() huge.Version {
     return backend.api_version;
 }
-pub fn createWindowContext(window: huge.Window) Error!WindowContext {
-    return try backend.createWindowContext(window);
+
+//====|initialization|===
+
+pub fn init() Error!void {
+    backend = @import("vulkan/vulkanBackend.zig").initBackend() catch
+        return Error.BackendInitializationFailure;
+}
+pub fn deinit() void {
+    backend.deinit();
 }
 
+//=======================
 pub const Pipeline = enum(u32) {
     _,
-    pub fn create(
-        ptype: PipelineType,
-        source_paths: []const ShaderSourcePath,
-    ) Error!Pipeline {
+    pub fn createPath(ptype: PipelineType, source_paths: []const ShaderSourcePath) Error!Pipeline {
         const m = max_pipeline_stages;
         if (source_paths.len > m) @panic(
             \\too many pipeline stages
@@ -51,6 +55,7 @@ pub const Pipeline = enum(u32) {
 
     pub const max_pipeline_stages = 7;
 };
+pub const OpaqueType = hgsl.OpaqueType;
 pub const PipelineType = enum { surface, compute };
 pub const ShaderSourcePath = struct {
     path: []const u8,
@@ -68,15 +73,29 @@ pub const Feature = enum {
 };
 pub const FeatureSet = huge.util.StructFromEnum(Feature, bool, false, .@"packed");
 
-pub const ShaderModule = enum(Handle) { _ };
-pub const ShaderStage = hgsl.Parser.ShaderStage;
+//handle types
+pub const RenderTarget = enum(Handle) { _ };
 
 pub const Buffer = enum(Handle) { _ };
 pub const CommandBuffer = enum(Handle) { _ };
 pub const Texture = enum(Handle) { _ };
+
+pub const ShaderModule = enum(Handle) { _ };
+pub const ShaderStage = hgsl.Parser.ShaderStage;
 
 pub const WindowContext = enum(Handle) { _ };
 pub const Handle = u32;
 
 pub const GApi = enum { vulkan, opengl, none };
 const max_handle = ~@as(Handle, 0);
+
+pub const Error = error{
+    OutOfMemory,
+
+    WindowContextCreationError,
+    BackendInitializationFailure,
+
+    ShaderCompilationError,
+
+    PresentationError,
+};

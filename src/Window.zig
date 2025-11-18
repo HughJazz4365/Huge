@@ -6,9 +6,6 @@ const util = huge.util;
 const Window = @This();
 
 pub const Handle = *glfw.Window;
-pub const Error = error{
-    ContextCreationError,
-} || glfw.GLFWError;
 
 handle: Handle = undefined,
 title: [:0]const u8,
@@ -18,8 +15,8 @@ context: huge.gpu.WindowContext = undefined,
 pub const FullHD: math.uvec2 = .{ 1920, 1080 };
 pub const HD: math.uvec2 = .{ 1280, 720 };
 
-pub fn frameEnd(self: Window) void {
-    if (huge.gpu.backend.api == .opengl) glfw.swapBuffers(self.handle);
+pub fn present(self: Window) !void {
+    try huge.gpu.present(self);
 }
 pub fn shouldClosePoll(self: Window) bool {
     const should = self.shouldClose();
@@ -60,6 +57,7 @@ pub fn create(attributes: Attributes) Error!Window {
 }
 
 pub fn destroy(self: Window) void {
+    huge.gpu.destroyWindowContext(self.context);
     glfw.destroyWindow(self.handle);
 }
 pub fn setAttributes(self: Window, attributes: Attributes) void {
@@ -138,3 +136,6 @@ pub const Attributes = struct {
     visible: bool = true,
     focused: bool = true,
 };
+pub const Error = error{
+    ContextCreationError,
+} || glfw.GLFWError;

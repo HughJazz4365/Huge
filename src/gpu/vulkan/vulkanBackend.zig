@@ -11,7 +11,10 @@ pub const vk = @import("vk.zig");
 
 const max_queue_family_count = 16;
 const max_physical_devices = 3;
-const min_vulkan_version: Version = .{ .major = 1, .minor = 3 };
+
+const min_vulkan_version: Version = .{ .major = 1, .minor = 2 };
+const max_vulkan_version: Version = undefined;
+
 const layers: []const [*:0]const u8 = if (zigbuiltin.mode == .Debug) &.{
     "VK_LAYER_KHRONOS_validation",
     // "VK_LAYER_LUNARG_api_dump",
@@ -27,15 +30,19 @@ var valid_physical_device_count: usize = 0;
 var current_physical_device_index: usize = 0;
 var device: vk.DeviceProxy = undefined;
 
-pub var bwp: vk.BaseWrapper = undefined;
-pub var iwp: vk.InstanceWrapper = undefined;
-pub var dwp: vk.DeviceWrapper = undefined;
+var bwp: vk.BaseWrapper = undefined;
+var iwp: vk.InstanceWrapper = undefined;
+var dwp: vk.DeviceWrapper = undefined;
 var queues: [queue_type_count]vk.Queue = @splat(.null_handle);
+inline fn queue(queue_type: QueueType) vk.Queue {
+    return queues[@intFromEnum(queue_type)];
+}
 
 inline fn pd() PhysicalDevice {
     return physical_devices[current_physical_device_index];
 }
 
+var api_version: Version = undefined;
 // var arena: std.heap.ArenaAllocator = un
 var shader_compiler: hgsl.Compiler = undefined;
 // var pipelines: List(VKPipeline) = .empty;
@@ -43,7 +50,7 @@ var shader_compiler: hgsl.Compiler = undefined;
 var shader_module_list: List(VKShaderModule) = .empty;
 var pipeline_list: List(VKPipeline) = .empty;
 
-var window_context_first: VKWindowContext = undefined;
+var window_context_primary: VKWindowContext = undefined;
 var window_context_list: List(VKWindowContext) = .empty;
 var window_context_count: u32 = 0;
 //======|methods|========
@@ -53,29 +60,50 @@ fn createPipeline(stages: []const gpu.ShaderModule) Error!Pipeline {
     return @enumFromInt(0);
 }
 fn createWindowContext(window: huge.Window) Error!gpu.WindowContext {
-    const wc = try VKWindowContext.create(window);
+    const wc = VKWindowContext.create(window) catch
+        return Error.WindowContextCreationError;
     if (window_context_count == 0) {
-        window_context_first = wc;
+        window_context_primary = wc;
         return @enumFromInt(0);
     } else {
         @panic("VK multiple window contexts");
     }
 }
+fn destroyWindowContext(handle: gpu.WindowContext) void {
+    const window_context = VKWindowContext.get(handle);
+    window_context.destroy();
+}
+fn present(window: huge.Window) Error!void {
+    const window_context = VKWindowContext.get(window.context);
+    const present_info: vk.PresentInfoKHR = .{
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = &.{window_context.render_finished_semaphores[window_context.index]},
+        .swapchain_count = 1,
+        .p_swapchains = &.{window_context.swapchain},
+        .p_image_indices = &.{window_context.index},
+    };
+    _ = device.queuePresentKHR(queue(.presentation), &present_info) catch |err|
+        switch (err) {
+            error.OutOfDateKHR => {
+                @panic("recreate swapchain");
+                // self.request_recreate = true;
+            },
+            else => return Error.PresentationError,
+        };
+}
 
 //===|implementations|===
-const VKWindowContext = @import("vulkanWindowContext.zig");
-
 const VKShaderModule = struct {
     vk_handle: vk.ShaderModule = .null_handle,
     stage: gpu.ShaderStage,
 
     push_constant_mappings: []const hgsl.PushConstantMapping,
     opaque_uniform_mappings: []const hgsl.OpaqueUniformMapping,
-    pub fn createPath(path: []const u8, entry_point: []const u8) Error!ShaderModule {
+    pub fn createPath(path: []const u8, entry_point: []const u8) Error!VKShaderModule {
         _ = .{ path, entry_point };
         // const result = shader_compiler.compileFile(path);
     }
-    pub fn createSource(source: []const u8, entry_point: []const u8) Error!ShaderModule {
+    pub fn createSource(source: []const u8, entry_point: []const u8) Error!VKShaderModule {
         if (true) @panic("VKShaderModule.createRaw");
         return try createPath(source, entry_point);
     }
@@ -96,6 +124,178 @@ const VKPipeline = struct {
     }
 };
 
+const VKRenderTarget = {};
+const VKWindowContext = struct {
+    const mic = 3; //max_image_count
+    const mfif = mic - 1; //max_frame_in_flight
+    const timeout: u64 = std.time.ns_per_s * 5;
+
+    index: u32 = 0, //current frame-in-flight index
+
+    surface: vk.SurfaceKHR = .null_handle,
+    request_recreate: bool = false,
+    swapchain: vk.SwapchainKHR = .null_handle,
+
+    images: [mic]vk.Image = @splat(.null_handle),
+    image_views: [mic]vk.ImageView = @splat(.null_handle),
+    image_count: u32 = undefined,
+
+    extent: vk.Extent2D = undefined,
+    surface_format: vk.SurfaceFormatKHR = undefined,
+    present_mode: vk.PresentModeKHR = .fifo_khr,
+
+    current_frame: usize = 0,
+    present_finished_semaphores: [mfif]vk.Semaphore = undefined,
+    render_finished_semaphores: [mfif]vk.Semaphore = undefined,
+    fences: [mfif]vk.Fence = undefined,
+    inline fn fif(self: VKWindowContext) u32 {
+        return @max(self.image_count - 1, 1);
+    }
+    pub fn create(window: huge.Window) !VKWindowContext {
+        var surface_handle: u64 = undefined;
+        if (glfw.createWindowSurface(
+            @intFromEnum(instance.handle),
+            window.handle,
+            null,
+            &surface_handle,
+        ) != .success) return Error.WindowContextCreationError;
+        var result: VKWindowContext = .{
+            .surface = @enumFromInt(surface_handle),
+        };
+
+        const capabilities = try instance.getPhysicalDeviceSurfaceCapabilitiesKHR(pd().handle, result.surface);
+
+        result.extent = blk: {
+            if (capabilities.current_extent.width == std.math.maxInt(u32)) {
+                var res: [2]c_int = @splat(0);
+                glfw.getFramebufferSize(window.handle, &res[0], &res[1]);
+                break :blk .{
+                    .width = std.math.clamp(@as(u32, @intCast(res[0])), capabilities.min_image_extent.width, capabilities.max_image_extent.width),
+                    .height = std.math.clamp(@as(u32, @intCast(res[1])), capabilities.min_image_extent.height, capabilities.max_image_extent.height),
+                };
+            }
+            break :blk .{
+                .width = std.math.clamp(capabilities.current_extent.width, capabilities.min_image_extent.width, capabilities.max_image_extent.width),
+                .height = std.math.clamp(capabilities.current_extent.height, capabilities.min_image_extent.height, capabilities.max_image_extent.height),
+            };
+        };
+
+        result.surface_format = blk: {
+            const max_surface_format_count = 100;
+            var surface_format_count: u32 = 0;
+            _ = try instance.getPhysicalDeviceSurfaceFormatsKHR(pd().handle, result.surface, &surface_format_count, null);
+            surface_format_count = @min(max_surface_format_count, surface_format_count);
+            var surface_format_storage: [max_surface_format_count]vk.SurfaceFormatKHR = undefined;
+            _ = try instance.getPhysicalDeviceSurfaceFormatsKHR(pd().handle, result.surface, &surface_format_count, &surface_format_storage);
+            break :blk for (surface_format_storage[0..surface_format_count]) |sf| {
+                if (sf.format == .b8g8r8a8_unorm and sf.color_space == .srgb_nonlinear_khr) break sf;
+            } else surface_format_storage[0];
+        };
+
+        result.present_mode = blk: {
+            var present_mode_storage: [@typeInfo(vk.PresentModeKHR).@"enum".fields.len]vk.PresentModeKHR = undefined;
+            var present_mode_count: u32 = 0;
+            _ = try instance.getPhysicalDeviceSurfacePresentModesKHR(pd().handle, result.surface, &present_mode_count, null);
+            _ = try instance.getPhysicalDeviceSurfacePresentModesKHR(pd().handle, result.surface, &present_mode_count, &present_mode_storage);
+            break :blk for (present_mode_storage[0..present_mode_count]) |pm| {
+                if (pm == vk.PresentModeKHR.mailbox_khr) break pm;
+            } else vk.PresentModeKHR.fifo_khr;
+        };
+        result.image_count = if (result.present_mode == .mailbox_khr) 3 else 2;
+        const exclusive = pd().queueFamilyIndex(.graphics) == pd().queueFamilyIndex(.presentation);
+        result.swapchain = try device.createSwapchainKHR(&.{
+            .surface = result.surface,
+            .min_image_count = result.image_count,
+
+            .present_mode = result.present_mode,
+            .image_format = result.surface_format.format,
+            .image_color_space = result.surface_format.color_space,
+            .image_extent = result.extent,
+
+            .image_array_layers = 1,
+            .image_sharing_mode = if (exclusive) .exclusive else .concurrent,
+            .image_usage = .{
+                .transfer_dst_bit = true,
+                .color_attachment_bit = true,
+            },
+            .queue_family_index_count = if (exclusive) 0 else 2,
+            .p_queue_family_indices = if (exclusive) null else &.{
+                pd().queueFamilyIndex(.graphics),
+                pd().queueFamilyIndex(.presentation),
+            },
+            .pre_transform = capabilities.current_transform,
+            .composite_alpha = .{ .opaque_bit_khr = true },
+            .clipped = .true,
+        }, vka);
+
+        _ = try device.getSwapchainImagesKHR(result.swapchain, &result.image_count, null);
+        result.image_count = @min(result.image_count, mic);
+        _ = try device.getSwapchainImagesKHR(result.swapchain, &result.image_count, &result.images);
+
+        for (0..result.image_count) |i|
+            result.image_views[i] = try device.createImageView(&.{
+                .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+                .format = result.surface_format.format,
+                .image = result.images[i],
+                .subresource_range = .{
+                    .aspect_mask = .{ .color_bit = true },
+                    .layer_count = 1,
+                    .base_array_layer = 0,
+                    .level_count = 1,
+                    .base_mip_level = 0,
+                },
+                .view_type = .@"2d",
+            }, vka);
+
+        for (0..result.fif()) |i| {
+            result.present_finished_semaphores[i] = try device.createSemaphore(&.{}, vka);
+            result.render_finished_semaphores[i] = try device.createSemaphore(&.{}, vka);
+            result.fences[i] = try device.createFence(&.{ .flags = .{ .signaled_bit = true } }, vka);
+        }
+        return result;
+    }
+    pub fn destroy(self: VKWindowContext) void {
+        device.queueWaitIdle(queue(.presentation)) catch
+            @panic("window context destruction failure");
+        _ = device.waitForFences(self.fif(), &self.fences, .true, timeout) catch
+            @panic("window context destruction failure");
+        for (self.image_views[0..self.image_count]) |iw|
+            device.destroyImageView(iw, vka);
+        device.destroySwapchainKHR(self.swapchain, vka);
+
+        for (0..self.fif()) |i| {
+            device.destroySemaphore(self.present_finished_semaphores[i], vka);
+            device.destroySemaphore(self.render_finished_semaphores[i], vka);
+            device.destroyFence(self.fences[i], vka);
+        }
+
+        instance.destroySurfaceKHR(self.surface, vka);
+    }
+    pub fn get(handle: gpu.WindowContext) *VKWindowContext {
+        return if (@intFromEnum(handle) == 0)
+            &window_context_primary
+        else
+            @panic("");
+    }
+};
+//===|vkextensions|====
+
+fn isDynamicRenderingBuiltin() bool {
+    return api_version.@">="(.{ .major = 1, .minor = 3 });
+}
+fn cmdBeginRendering(command_buffer: vk.CommandBuffer, rendering_info: *const vk.RenderingInfo) void {
+    if (isDynamicRenderingBuiltin())
+        device.cmdBeginRendering(command_buffer, rendering_info)
+    else
+        device.cmdBeginRenderingKHR(command_buffer, rendering_info);
+}
+fn cmdEndRendering(command_buffer: vk.CommandBuffer, rendering_info: *const vk.RenderingInfo) void {
+    if (isDynamicRenderingBuiltin())
+        device.cmdEndRendering(command_buffer, rendering_info)
+    else
+        device.cmdEndRenderingKHR(command_buffer, rendering_info);
+}
+
 //===|initialization|====
 
 pub fn initBackend() VKError!gpu.Backend {
@@ -108,13 +308,19 @@ pub fn initBackend() VKError!gpu.Backend {
         return VKError.UnsupportedApiVersion;
     try initInstance(arena.allocator(), instance_api_version);
 
-    const device_extensions: []const [*:0]const u8 = &.{
-        vk.extensions.khr_swapchain.name,
-    }; //optional extensions
-    try initPhysicalDevices(arena.allocator(), device_extensions);
+    var extension_name_buf: [10][*:0]const u8 = undefined;
+    var device_extension_list: List([*:0]const u8) = .initBuffer(&extension_name_buf);
+
+    device_extension_list.appendAssumeCapacity(vk.extensions.khr_swapchain.name);
+    if (!instance_api_version.@">="(.{ .major = 1, .minor = 3 }))
+        device_extension_list.appendAssumeCapacity(vk.extensions.khr_dynamic_rendering.name);
+
+    try initPhysicalDevices(arena.allocator(), device_extension_list.items);
     const physical_device_api_version = castVersion(@bitCast(instance.getPhysicalDeviceProperties(pd().handle).api_version));
 
-    const api_version = if (physical_device_api_version.@">="(instance_api_version)) instance_api_version else physical_device_api_version;
+    api_version = if (physical_device_api_version.@">="(instance_api_version)) instance_api_version else physical_device_api_version;
+    try initLogicalDeviceAndQueues(device_extension_list.items);
+
     shader_compiler = .new(null, null, .{ .target_env = .vulkan1_4 });
     return versionBackend(api_version);
 }
@@ -122,8 +328,59 @@ pub fn initBackend() VKError!gpu.Backend {
 fn deinit() void {
     shader_compiler.deinit();
 }
+fn initLogicalDeviceAndQueues(extensions: []const [*:0]const u8) VKError!void {
+    var queue_create_infos: [queue_type_count]vk.DeviceQueueCreateInfo = undefined;
+    var queues_to_create: [queue_type_count]u8 = undefined;
+    var count: usize = 0;
 
-fn initInstance(allocator: Allocator, api_version: Version) VKError!void {
+    //track all unique queue families
+    for (pd().queue_family_indices) |qi| {
+        if (~qi == 0) continue;
+
+        for (0..count) |c| {
+            if (queues_to_create[c] == qi) break;
+        } else {
+            queues_to_create[count] = qi;
+            queue_create_infos[count] = .{
+                .queue_count = 1,
+                .queue_family_index = qi,
+                .p_queue_priorities = &.{1.0},
+            };
+            count += 1;
+        }
+    }
+
+    const dynamic_rendering_feature_ptr: *const anyopaque =
+        if (isDynamicRenderingBuiltin())
+            &vk.PhysicalDeviceDynamicRenderingFeatures{ .dynamic_rendering = .true }
+        else
+            &vk.PhysicalDeviceDynamicRenderingFeaturesKHR{ .dynamic_rendering = .true };
+
+    const device_create_info: vk.DeviceCreateInfo = .{
+        .enabled_extension_count = @intCast(extensions.len),
+        .pp_enabled_extension_names = extensions.ptr,
+        .queue_create_info_count = @intCast(count),
+        .p_queue_create_infos = &queue_create_infos,
+        .pp_enabled_layer_names = layers.ptr,
+        .enabled_layer_count = @intCast(layers.len),
+
+        .p_next = dynamic_rendering_feature_ptr,
+    };
+
+    const device_handle = instance.createDevice(
+        pd().handle,
+        &device_create_info,
+        vka,
+    ) catch return VKError.LogicalDeviceInitializationFailure;
+    dwp = .load(device_handle, instance.wrapper.dispatch.vkGetDeviceProcAddr.?);
+    device = .init(device_handle, &dwp);
+
+    for (0..queue_type_count) |i| {
+        if (~pd().queue_family_indices[i] != 0)
+            queues[i] = device.getDeviceQueue(pd().queue_family_indices[i], 0);
+    }
+}
+fn initInstance(allocator: Allocator, instance_api_version: Version) VKError!void {
     const available_layers: []vk.LayerProperties =
         if (layers.len > 0) bwp.enumerateInstanceLayerPropertiesAlloc(allocator) catch return VKError.OutOfMemory else &.{};
 
@@ -139,6 +396,10 @@ fn initInstance(allocator: Allocator, api_version: Version) VKError!void {
 
     const available_instance_extensions: []vk.ExtensionProperties =
         bwp.enumerateInstanceExtensionPropertiesAlloc(null, allocator) catch return VKError.OutOfMemory;
+    // for (available_instance_extensions) |aie| {
+    //     std.debug.print("ext: {s}\n", .{@as([*:0]const u8, @ptrCast(@alignCast(&aie.extension_name)))});
+    // }
+
     try checkExtensionPresence(instance_extensions, available_instance_extensions);
     allocator.free(available_instance_extensions);
 
@@ -147,7 +408,7 @@ fn initInstance(allocator: Allocator, api_version: Version) VKError!void {
         .application_version = @bitCast(@as(u32, 0)),
         .p_engine_name = huge.name,
         .engine_version = toVulkanVersion(huge.version),
-        .api_version = toVulkanVersion(api_version),
+        .api_version = toVulkanVersion(instance_api_version),
     };
     const instance_create_info: vk.InstanceCreateInfo = .{
         .p_application_info = &app_info,
@@ -235,6 +496,9 @@ fn initPhysicalDevice(allocator: Allocator, p: *PhysicalDevice, extensions: []co
 
     const available_extensions =
         instance.enumerateDeviceExtensionPropertiesAlloc(p.handle, null, allocator) catch return VKError.OutOfMemory;
+    // for (available_extensions) |aie| {
+    //     std.debug.print("dext: {s}\n", .{@as([*:0]const u8, @ptrCast(@alignCast(&aie.extension_name)))});
+    // }
     try checkExtensionPresence(extensions, available_extensions);
     allocator.free(available_extensions);
 
@@ -378,6 +642,9 @@ const PhysicalDevice = struct {
     type: vk.PhysicalDeviceType = .discrete_gpu,
 
     pub const max_name_len = 128;
+    pub fn queueFamilyIndex(self: *const PhysicalDevice, queue_type: QueueType) u8 {
+        return self.queue_family_indices[@intFromEnum(queue_type)];
+    }
     pub fn format(self: PhysicalDevice, writer: *std.Io.Writer) !void {
         try writer.print("Physical Device({}){{\n", .{self.handle});
         try writer.print("Name: {s}\n", .{self.name_storage[0..self.name_len]});
@@ -431,6 +698,13 @@ fn castVersion(vk_version: vk.Version) Version {
 fn toVulkanVersion(version: Version) u32 {
     return @bitCast(vk.makeApiVersion(0, @truncate(version.major), @truncate(version.minor), 0));
 }
+const glfw = huge.Window.glfw;
+const Error = gpu.Error;
+const Pipeline = gpu.Pipeline;
+const ShaderModule = gpu.ShaderModule;
+const Version = huge.Version;
+const Allocator = std.mem.Allocator;
+const List = std.ArrayList;
 const VKError = error{
     OutOfMemory,
 
@@ -442,14 +716,9 @@ const VKError = error{
     PhysicalDeviceInitializationFailure,
     DummyWindowCreationFailure,
     MissingQueueType,
+
+    LogicalDeviceInitializationFailure,
 };
-const glfw = huge.Window.glfw;
-const Error = gpu.Error;
-const Pipeline = gpu.Pipeline;
-const ShaderModule = gpu.ShaderModule;
-const Version = huge.Version;
-const Allocator = std.mem.Allocator;
-const List = std.ArrayList;
 fn versionBackend(version: Version) gpu.Backend {
     return .{
         .api = .vulkan,
@@ -457,5 +726,7 @@ fn versionBackend(version: Version) gpu.Backend {
         .deinit = &deinit,
         .createPipeline = &createPipeline,
         .createWindowContext = &createWindowContext,
+        .destroyWindowContext = &destroyWindowContext,
+        .present = &present,
     };
 }

@@ -6,7 +6,7 @@ pub fn main() !void {
     try huge.init();
     defer huge.deinit();
 
-    const m = try gpu.Pipeline.create(.surface, &.{
+    const m = try gpu.Pipeline.createPath(.surface, &.{
         .{ .path = "shader.hgsl", .entry_point = "vert" },
         .{ .path = "shader.hgsl", .entry_point = "frag" },
     });
@@ -14,7 +14,7 @@ pub fn main() !void {
     var window = try huge.Window.create(.{ .title = "sample#0", .size = huge.Window.HD });
     defer window.destroy();
 
-    // while (!window.shouldClose()) {
-    // window.frameEnd();
-    // }
+    while (!window.shouldClose()) {
+        try window.present();
+    }
 }
