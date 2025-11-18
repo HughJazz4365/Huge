@@ -9,6 +9,7 @@ pub const vk = @import("vk.zig");
 
 //=====|constants|======
 
+const timeout: u64 = std.time.ns_per_s * 1;
 const max_queue_family_count = 16;
 const max_physical_devices = 3;
 
@@ -75,14 +76,22 @@ fn destroyWindowContext(handle: gpu.WindowContext) void {
 }
 fn present(window: huge.Window) Error!void {
     const window_context = VKWindowContext.get(window.context);
-    const present_info: vk.PresentInfoKHR = .{
-        .wait_semaphore_count = 1,
-        .p_wait_semaphores = &.{window_context.render_finished_semaphores[window_context.index]},
+    const image_index = (device.acquireNextImageKHR(
+        window_context.swapchain,
+        timeout,
+        window_context.present_finished_semaphores[window_context.fif_index],
+        .null_handle,
+    ) catch return Error.PresentationError).image_index;
+    if (~image_index == 0) return;
+
+    _ = device.queuePresentKHR(queue(.presentation), &.{
+        .wait_semaphore_count = 0,
+        // .p_wait_semaphores = &.{window_context.render_finished_semaphores[window_context.index]},
+        .p_wait_semaphores = &.{},
         .swapchain_count = 1,
         .p_swapchains = &.{window_context.swapchain},
-        .p_image_indices = &.{window_context.index},
-    };
-    _ = device.queuePresentKHR(queue(.presentation), &present_info) catch |err|
+        .p_image_indices = &.{image_index},
+    }) catch |err|
         switch (err) {
             error.OutOfDateKHR => {
                 @panic("recreate swapchain");
@@ -128,9 +137,9 @@ const VKRenderTarget = {};
 const VKWindowContext = struct {
     const mic = 3; //max_image_count
     const mfif = mic - 1; //max_frame_in_flight
-    const timeout: u64 = std.time.ns_per_s * 5;
+    // const timeout: u64 = std.time.ns_per_s * 5;
 
-    index: u32 = 0, //current frame-in-flight index
+    fif_index: u32 = 0, //current frame-in-flight index
 
     surface: vk.SurfaceKHR = .null_handle,
     request_recreate: bool = false,
@@ -150,6 +159,15 @@ const VKWindowContext = struct {
     fences: [mfif]vk.Fence = undefined,
     inline fn fif(self: VKWindowContext) u32 {
         return @max(self.image_count - 1, 1);
+    }
+    pub fn waitForFence(self: VKWindowContext) !void {
+        _ = try device.waitForFences(
+            1,
+            &.{self.fences[self.fif_index]},
+            .true,
+            timeout,
+        );
+        try device.resetFences(1, &.{self.fences[self.fif_index]});
     }
     pub fn create(window: huge.Window) !VKWindowContext {
         var surface_handle: u64 = undefined;
@@ -326,6 +344,7 @@ pub fn initBackend() VKError!gpu.Backend {
 }
 
 fn deinit() void {
+    device.deviceWaitIdle() catch {};
     shader_compiler.deinit();
 }
 fn initLogicalDeviceAndQueues(extensions: []const [*:0]const u8) VKError!void {

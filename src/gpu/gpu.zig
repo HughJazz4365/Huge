@@ -7,6 +7,16 @@ var backend: Backend = undefined; //default to software renderer??
 
 //=======|methods|=======
 
+pub fn draw(
+    command_buffer: CommandBuffer,
+    mode: DrawMode,
+    count: u32,
+    offset: u32,
+    instance_count: u32,
+    instance_offset: u32,
+) Error!void {
+    _ = .{ command_buffer, mode, count, offset, instance_count, instance_offset };
+}
 pub fn getWindowRenderTarget(window: huge.Window) RenderTarget {
     return backend.getWindowRenderTarget(window);
 }
@@ -37,6 +47,10 @@ pub fn deinit() void {
 }
 
 //=======================
+pub const DrawMode = union(enum) {
+    array,
+    indexed: struct { vertex_offset: u32 },
+};
 pub const Pipeline = enum(u32) {
     _,
     pub fn createPath(ptype: PipelineType, source_paths: []const ShaderSourcePath) Error!Pipeline {
