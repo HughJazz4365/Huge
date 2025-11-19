@@ -1,5 +1,6 @@
 const std = @import("std");
 const huge = @import("../root.zig");
+const math = huge.math;
 pub const hgsl = @import("hgsl");
 pub const Backend = @import("GpuBackend.zig");
 
@@ -9,13 +10,18 @@ var backend: Backend = undefined; //default to software renderer??
 
 pub fn draw(
     command_buffer: CommandBuffer,
-    mode: DrawMode,
-    count: u32,
-    offset: u32,
-    instance_count: u32,
-    instance_offset: u32,
+    render_target: RenderTarget,
+    pipeline: Pipeline,
+    params: DrawParams,
 ) Error!void {
-    _ = .{ command_buffer, mode, count, offset, instance_count, instance_offset };
+    try backend.draw(command_buffer, render_target, pipeline, params);
+}
+pub fn clear(
+    command_buffer: CommandBuffer,
+    render_target: RenderTarget,
+    value: ClearValue,
+) Error!void {
+    try backend.clear(command_buffer, render_target, value);
 }
 pub fn getWindowRenderTarget(window: huge.Window) RenderTarget {
     return backend.getWindowRenderTarget(window);
@@ -47,19 +53,27 @@ pub fn deinit() void {
 }
 
 //=======================
-pub const DrawMode = union(enum) {
+pub const DrawParams = struct {
+    mode: DrawMode = .array,
+    count: u32,
+    offset: u32 = 0,
+
+    instance_count: u32 = 1,
+    instance_offset: u32 = 0,
+
+    indexed_vertex_offset: i32 = 0,
+};
+pub const DrawMode = enum {
     array,
-    indexed: struct { vertex_offset: u32 },
+    indexed,
+};
+pub const ClearValue = struct {
+    color: ?math.vec4 = null,
 };
 pub const Pipeline = enum(u32) {
     _,
-    pub fn createPath(ptype: PipelineType, source_paths: []const ShaderSourcePath) Error!Pipeline {
-        const m = max_pipeline_stages;
-        if (source_paths.len > m) @panic(
-            \\too many pipeline stages
-            \\TODO: output default pipeline for corresponding ptype
-        );
-        _ = ptype;
+    pub fn createPath(pipeline_source: PipelineSourcePath) Error!Pipeline {
+        _ = pipeline_source;
         return try backend.createPipeline(&.{});
     }
     pub fn setProperty(self: Pipeline, name: []const u8, value: anytype) Error!void {
@@ -71,6 +85,15 @@ pub const Pipeline = enum(u32) {
 };
 pub const OpaqueType = hgsl.OpaqueType;
 pub const PipelineType = enum { surface, compute };
+pub const PipelineSourcePath = union(PipelineType) {
+    surface: SurfacePipelineSourcePath,
+    compute: ShaderSourcePath,
+};
+pub const SurfacePipelineSourcePath = struct {
+    vertex: ShaderSourcePath,
+    fragment: ShaderSourcePath,
+    geometry: ?ShaderSourcePath = null,
+};
 pub const ShaderSourcePath = struct {
     path: []const u8,
     entry_point: []const u8,
@@ -105,6 +128,7 @@ const max_handle = ~@as(Handle, 0);
 
 pub const Error = error{
     OutOfMemory,
+    ResourceCreationError,
 
     WindowContextCreationError,
     BackendInitializationFailure,
@@ -112,4 +136,7 @@ pub const Error = error{
     ShaderCompilationError,
 
     PresentationError,
+
+    CommadBufferRecordingError,
+    CommadBufferSubmitionError,
 };

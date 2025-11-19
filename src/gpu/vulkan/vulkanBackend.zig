@@ -9,7 +9,7 @@ pub const vk = @import("vk.zig");
 
 //=====|constants|======
 
-const timeout: u64 = std.time.ns_per_s * 1;
+const timeout: u64 = std.time.ns_per_s * 5;
 const max_queue_family_count = 16;
 const max_physical_devices = 3;
 
@@ -39,6 +39,33 @@ inline fn queue(queue_type: QueueType) vk.Queue {
     return queues[@intFromEnum(queue_type)];
 }
 
+var command_pools: [queue_type_count]vk.CommandPool = @splat(.null_handle);
+fn commandPool(queue_type: QueueType) Error!vk.CommandPool {
+    const index = @intFromEnum(queue_type);
+    if (command_pools[index] == .null_handle) {
+        const qfi = pd().queueFamilyIndex(queue_type);
+        const created = device.createCommandPool(&.{
+            .flags = .{ .reset_command_buffer_bit = true },
+            .queue_family_index = qfi,
+        }, vka) catch
+            return Error.ResourceCreationError;
+        for (&command_pools, 0..) |*cmd_pools, i| {
+            if (pd().queueFamilyIndex(@enumFromInt(i)) == qfi)
+                cmd_pools.* = created;
+        }
+    }
+    return command_pools[index];
+}
+fn allocCommandBuffer(queue_type: QueueType, level: vk.CommandBufferLevel) Error!vk.CommandBuffer {
+    var result: vk.CommandBuffer = .null_handle;
+    device.allocateCommandBuffers(&.{
+        .command_pool = try commandPool(queue_type),
+        .level = level,
+        .command_buffer_count = 1,
+    }, @ptrCast(&result)) catch return Error.ResourceCreationError;
+    return result;
+}
+
 inline fn pd() PhysicalDevice {
     return physical_devices[current_physical_device_index];
 }
@@ -56,11 +83,22 @@ var window_context_list: List(VKWindowContext) = .empty;
 var window_context_count: u32 = 0;
 //======|methods|========
 
-fn createPipeline(stages: []const gpu.ShaderModule) Error!Pipeline {
+fn draw(
+    cmd: CommandBuffer,
+    render_target: RenderTarget,
+    pipeline: Pipeline,
+    params: gpu.DrawParams,
+) Error!void {
+    _ = .{ cmd, render_target, pipeline, params };
+}
+fn createPipeline(stages: []const ShaderModule) Error!Pipeline {
     _ = stages;
     return @enumFromInt(0);
 }
-fn createWindowContext(window: huge.Window) Error!gpu.WindowContext {
+fn getWindowRenderTarget(window: huge.Window) RenderTarget {
+    return @enumFromInt((1 << 31) | @intFromEnum(window.context));
+}
+fn createWindowContext(window: huge.Window) Error!WindowContext {
     const wc = VKWindowContext.create(window) catch
         return Error.WindowContextCreationError;
     if (window_context_count == 0) {
@@ -70,24 +108,89 @@ fn createWindowContext(window: huge.Window) Error!gpu.WindowContext {
         @panic("VK multiple window contexts");
     }
 }
-fn destroyWindowContext(handle: gpu.WindowContext) void {
+fn destroyWindowContext(handle: WindowContext) void {
     const window_context = VKWindowContext.get(handle);
     window_context.destroy();
 }
+
+var temp_cmd: vk.CommandBuffer = .null_handle;
 fn present(window: huge.Window) Error!void {
     const window_context = VKWindowContext.get(window.context);
+    _ = device.waitForFences(
+        1,
+        &.{window_context.fences[window_context.fif_index]},
+        .true,
+        timeout,
+    ) catch return Error.CommadBufferSubmitionError;
+
+    device.resetFences(1, &.{window_context.fences[window_context.fif_index]}) catch
+        return Error.PresentationError;
+
     const image_index = (device.acquireNextImageKHR(
         window_context.swapchain,
         timeout,
-        window_context.present_finished_semaphores[window_context.fif_index],
+        window_context.acquire_semaphores[window_context.fif_index],
         .null_handle,
     ) catch return Error.PresentationError).image_index;
     if (~image_index == 0) return;
 
+    if (temp_cmd == .null_handle)
+        temp_cmd = try allocCommandBuffer(.graphics, .primary);
+    if (temp_cmd != .null_handle)
+        device.resetCommandBuffer(temp_cmd, .{}) catch return Error.PresentationError;
+
+    const image_barrier: vk.ImageMemoryBarrier = .{
+        .src_access_mask = .{ .color_attachment_write_bit = true },
+        .dst_access_mask = .{},
+        .old_layout = .undefined,
+        .new_layout = .present_src_khr,
+        .src_queue_family_index = pd().queueFamilyIndex(.presentation),
+        .dst_queue_family_index = pd().queueFamilyIndex(.presentation),
+        .image = window_context.images[image_index],
+        .subresource_range = .{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        },
+    };
+    device.beginCommandBuffer(temp_cmd, &.{
+        .flags = .{},
+    }) catch return Error.CommadBufferRecordingError;
+    device.cmdPipelineBarrier(
+        temp_cmd,
+        .{ .all_commands_bit = true },
+        .{ .bottom_of_pipe_bit = true },
+        .{},
+        0,
+        null,
+        0,
+        null,
+        1,
+        &.{image_barrier},
+    );
+    device.endCommandBuffer(temp_cmd) catch
+        return Error.CommadBufferRecordingError;
+    device.queueSubmit(
+        queue(.presentation),
+        1,
+        &.{.{
+            .command_buffer_count = 1,
+            .p_command_buffers = &.{temp_cmd},
+            .p_wait_dst_stage_mask = &.{.{ .color_attachment_output_bit = true }},
+
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = &.{window_context.acquire_semaphores[window_context.fif_index]},
+            .signal_semaphore_count = 1,
+            .p_signal_semaphores = &.{window_context.submit_semaphores[image_index]},
+        }},
+        window_context.fences[window_context.fif_index],
+    ) catch return Error.CommadBufferSubmitionError;
+
     _ = device.queuePresentKHR(queue(.presentation), &.{
-        .wait_semaphore_count = 0,
-        // .p_wait_semaphores = &.{window_context.render_finished_semaphores[window_context.index]},
-        .p_wait_semaphores = &.{},
+        .wait_semaphore_count = 1,
+        .p_wait_semaphores = &.{window_context.submit_semaphores[image_index]},
         .swapchain_count = 1,
         .p_swapchains = &.{window_context.swapchain},
         .p_image_indices = &.{image_index},
@@ -100,7 +203,6 @@ fn present(window: huge.Window) Error!void {
             else => return Error.PresentationError,
         };
 }
-
 //===|implementations|===
 const VKShaderModule = struct {
     vk_handle: vk.ShaderModule = .null_handle,
@@ -133,11 +235,16 @@ const VKPipeline = struct {
     }
 };
 
-const VKRenderTarget = {};
+const VKRenderTarget = struct {};
+
+const VKCommandBuffer = struct {
+    handles: [queue_type_count]vk.CommandBuffer = @splat(.null_handle),
+};
+
 const VKWindowContext = struct {
     const mic = 3; //max_image_count
     const mfif = mic - 1; //max_frame_in_flight
-    // const timeout: u64 = std.time.ns_per_s * 5;
+    image_transition_command_buffer: vk.CommandBuffer = .null_handle,
 
     fif_index: u32 = 0, //current frame-in-flight index
 
@@ -154,8 +261,8 @@ const VKWindowContext = struct {
     present_mode: vk.PresentModeKHR = .fifo_khr,
 
     current_frame: usize = 0,
-    present_finished_semaphores: [mfif]vk.Semaphore = undefined,
-    render_finished_semaphores: [mfif]vk.Semaphore = undefined,
+    acquire_semaphores: [mfif]vk.Semaphore = undefined,
+    submit_semaphores: [mic]vk.Semaphore = undefined,
     fences: [mfif]vk.Fence = undefined,
     inline fn fif(self: VKWindowContext) u32 {
         return @max(self.image_count - 1, 1);
@@ -266,10 +373,11 @@ const VKWindowContext = struct {
             }, vka);
 
         for (0..result.fif()) |i| {
-            result.present_finished_semaphores[i] = try device.createSemaphore(&.{}, vka);
-            result.render_finished_semaphores[i] = try device.createSemaphore(&.{}, vka);
+            result.acquire_semaphores[i] = try device.createSemaphore(&.{}, vka);
             result.fences[i] = try device.createFence(&.{ .flags = .{ .signaled_bit = true } }, vka);
         }
+        for (0..result.image_count) |i|
+            result.submit_semaphores[i] = try device.createSemaphore(&.{}, vka);
         return result;
     }
     pub fn destroy(self: VKWindowContext) void {
@@ -282,14 +390,15 @@ const VKWindowContext = struct {
         device.destroySwapchainKHR(self.swapchain, vka);
 
         for (0..self.fif()) |i| {
-            device.destroySemaphore(self.present_finished_semaphores[i], vka);
-            device.destroySemaphore(self.render_finished_semaphores[i], vka);
+            device.destroySemaphore(self.acquire_semaphores[i], vka);
             device.destroyFence(self.fences[i], vka);
         }
+        for (0..self.image_count) |i|
+            device.destroySemaphore(self.submit_semaphores[i], vka);
 
         instance.destroySurfaceKHR(self.surface, vka);
     }
-    pub fn get(handle: gpu.WindowContext) *VKWindowContext {
+    pub fn get(handle: WindowContext) *VKWindowContext {
         return if (@intFromEnum(handle) == 0)
             &window_context_primary
         else
@@ -346,6 +455,13 @@ pub fn initBackend() VKError!gpu.Backend {
 fn deinit() void {
     device.deviceWaitIdle() catch {};
     shader_compiler.deinit();
+    for (&command_pools) |cmd_pool| {
+        for (&command_pools) |*i| {
+            if (cmd_pool == i.*) i.* = .null_handle;
+        }
+        if (cmd_pool != .null_handle)
+            device.destroyCommandPool(cmd_pool, vka);
+    }
 }
 fn initLogicalDeviceAndQueues(extensions: []const [*:0]const u8) VKError!void {
     var queue_create_infos: [queue_type_count]vk.DeviceQueueCreateInfo = undefined;
@@ -542,7 +658,6 @@ fn getQueueFamilyIndices(allocator: Allocator, handle: vk.PhysicalDevice, dummy_
             .protected = qfp.queue_flags.protected_bit,
             .video_decode = qfp.queue_flags.video_decode_bit_khr,
             .video_encode = qfp.queue_flags.video_encode_bit_khr,
-            .optical_flow = qfp.queue_flags.optical_flow_bit_nv,
             .presentation = @intFromEnum(instance.getPhysicalDeviceSurfaceSupportKHR(handle, @intCast(i), @enumFromInt(dummy_window.surface_handle)) catch .false) > 0,
         };
         inline for (@typeInfo(QueueType).@"enum".fields, 0..) |ef, j|
@@ -700,7 +815,7 @@ pub const minimal_required_queue_family_config: QueueConfiguration = .{
     .transfer = true,
     .compute = true,
 };
-pub const QueueType = enum(u8) { graphics, presentation, compute, transfer, sparse_binding, protected, video_decode, video_encode, optical_flow };
+pub const QueueType = enum(u8) { graphics, presentation, compute, transfer, sparse_binding, protected, video_decode, video_encode };
 
 //=======================
 pub const loader = &struct {
@@ -721,6 +836,9 @@ const glfw = huge.Window.glfw;
 const Error = gpu.Error;
 const Pipeline = gpu.Pipeline;
 const ShaderModule = gpu.ShaderModule;
+const CommandBuffer = gpu.CommandBuffer;
+const RenderTarget = gpu.RenderTarget;
+const WindowContext = gpu.WindowContext;
 const Version = huge.Version;
 const Allocator = std.mem.Allocator;
 const List = std.ArrayList;
@@ -743,9 +861,15 @@ fn versionBackend(version: Version) gpu.Backend {
         .api = .vulkan,
         .api_version = version,
         .deinit = &deinit,
+
+        .draw = &draw,
+
         .createPipeline = &createPipeline,
+
+        .present = &present,
+        .getWindowRenderTarget = &getWindowRenderTarget,
+
         .createWindowContext = &createWindowContext,
         .destroyWindowContext = &destroyWindowContext,
-        .present = &present,
     };
 }

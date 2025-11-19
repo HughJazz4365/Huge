@@ -18,6 +18,9 @@ pub const HD: math.uvec2 = .{ 1280, 720 };
 pub fn present(self: Window) !void {
     try huge.gpu.present(self);
 }
+pub fn renderTarget(self: Window) huge.gpu.RenderTarget {
+    return huge.gpu.getWindowRenderTarget(self);
+}
 pub fn shouldClosePoll(self: Window) bool {
     const should = self.shouldClose();
     if (!should) pollEvents();

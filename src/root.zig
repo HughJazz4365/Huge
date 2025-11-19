@@ -2,6 +2,7 @@ const std = @import("std");
 pub const Window = @import("Window.zig");
 pub const math = @import("math.zig");
 pub const gpu = @import("gpu/gpu.zig");
+pub const rend = @import("gpu/rendering.zig");
 pub const util = @import("util.zig");
 pub const time = void;
 

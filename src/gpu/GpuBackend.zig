@@ -9,12 +9,6 @@ api_version: huge.Version = .{},
 deinit: DeinitFn = undefined,
 
 draw: DrawFn = undefined,
-// mode: union(enum){
-// count : u32
-// offset: u32
-// instance_count : u32
-// instance_offset: u32
-// drawIndirect: DrawIndexedFn
 
 createPipeline: CreatePipelineFn = undefined,
 getDefaultPipeline: GetDefaultPipelineFn = undefined,
@@ -29,7 +23,7 @@ createWindowContext: CreateWindowContextFn = undefined,
 destroyWindowContext: DestroyWindowContextFn = undefined,
 present: PresentFn = undefined,
 
-pub const DrawFn = *const fn (CommandBuffer, gpu.DrawMode, u32, u32, u32, u32) Error!void;
+pub const DrawFn = *const fn (CommandBuffer, RenderTarget, Pipeline, gpu.DrawParams) Error!void;
 pub const CreatePipelineFn = *const fn ([]const ShaderModule) Error!Pipeline;
 pub const SetPipelinePushConstantFn = *const fn (Pipeline, []const u8, u32, u32, *const anyopaque) Error!void;
 pub const SetPipelineOpaqueUniformFn = *const fn (Pipeline, []const u8, u32, u32, gpu.OpaqueType, gpu.Handle) Error!void;
