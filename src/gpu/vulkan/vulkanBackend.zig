@@ -81,15 +81,12 @@ var pipeline_list: List(VKPipeline) = .empty;
 var window_context_primary: VKWindowContext = undefined;
 var window_context_list: List(VKWindowContext) = .empty;
 var window_context_count: u32 = 0;
+
+var current_render_target: ?RenderTarget = null;
 //======|methods|========
 
-fn draw(
-    cmd: CommandBuffer,
-    render_target: RenderTarget,
-    pipeline: Pipeline,
-    params: gpu.DrawParams,
-) Error!void {
-    _ = .{ cmd, render_target, pipeline, params };
+fn draw(pipeline: Pipeline, params: gpu.DrawParams) Error!void {
+    _ = .{ pipeline, params };
 }
 fn createPipeline(stages: []const ShaderModule) Error!Pipeline {
     _ = stages;
@@ -112,97 +109,23 @@ fn destroyWindowContext(handle: WindowContext) void {
     const window_context = VKWindowContext.get(handle);
     window_context.destroy();
 }
+fn beginRendering(render_target: RenderTarget, clear_value: ClearValue) Error!void {
+    if (current_render_target) |_| try endRendering();
 
-var temp_cmd: vk.CommandBuffer = .null_handle;
-fn present(window: huge.Window) Error!void {
-    const window_context = VKWindowContext.get(window.context);
-    _ = device.waitForFences(
-        1,
-        &.{window_context.fences[window_context.fif_index]},
-        .true,
-        timeout,
-    ) catch return Error.CommadBufferSubmitionError;
-
-    device.resetFences(1, &.{window_context.fences[window_context.fif_index]}) catch
-        return Error.PresentationError;
-
-    const image_index = (device.acquireNextImageKHR(
-        window_context.swapchain,
-        timeout,
-        window_context.acquire_semaphores[window_context.fif_index],
-        .null_handle,
-    ) catch return Error.PresentationError).image_index;
-    if (~image_index == 0) return;
-
-    if (temp_cmd == .null_handle)
-        temp_cmd = try allocCommandBuffer(.graphics, .primary);
-    if (temp_cmd != .null_handle)
-        device.resetCommandBuffer(temp_cmd, .{}) catch return Error.PresentationError;
-
-    const image_barrier: vk.ImageMemoryBarrier = .{
-        .src_access_mask = .{ .color_attachment_write_bit = true },
-        .dst_access_mask = .{},
-        .old_layout = .undefined,
-        .new_layout = .present_src_khr,
-        .src_queue_family_index = pd().queueFamilyIndex(.presentation),
-        .dst_queue_family_index = pd().queueFamilyIndex(.presentation),
-        .image = window_context.images[image_index],
-        .subresource_range = .{
-            .aspect_mask = .{ .color_bit = true },
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-    };
-    device.beginCommandBuffer(temp_cmd, &.{
-        .flags = .{},
-    }) catch return Error.CommadBufferRecordingError;
-    device.cmdPipelineBarrier(
-        temp_cmd,
-        .{ .all_commands_bit = true },
-        .{ .bottom_of_pipe_bit = true },
-        .{},
-        0,
-        null,
-        0,
-        null,
-        1,
-        &.{image_barrier},
-    );
-    device.endCommandBuffer(temp_cmd) catch
-        return Error.CommadBufferRecordingError;
-    device.queueSubmit(
-        queue(.presentation),
-        1,
-        &.{.{
-            .command_buffer_count = 1,
-            .p_command_buffers = &.{temp_cmd},
-            .p_wait_dst_stage_mask = &.{.{ .color_attachment_output_bit = true }},
-
-            .wait_semaphore_count = 1,
-            .p_wait_semaphores = &.{window_context.acquire_semaphores[window_context.fif_index]},
-            .signal_semaphore_count = 1,
-            .p_signal_semaphores = &.{window_context.submit_semaphores[image_index]},
-        }},
-        window_context.fences[window_context.fif_index],
-    ) catch return Error.CommadBufferSubmitionError;
-
-    _ = device.queuePresentKHR(queue(.presentation), &.{
-        .wait_semaphore_count = 1,
-        .p_wait_semaphores = &.{window_context.submit_semaphores[image_index]},
-        .swapchain_count = 1,
-        .p_swapchains = &.{window_context.swapchain},
-        .p_image_indices = &.{image_index},
-    }) catch |err|
-        switch (err) {
-            error.OutOfDateKHR => {
-                @panic("recreate swapchain");
-                // self.request_recreate = true;
-            },
-            else => return Error.PresentationError,
-        };
+    current_render_target = render_target;
+    if (VKWindowContext.fromRenderTarget(render_target)) |wc| {
+        try wc.beginRendering(clear_value);
+    } else @panic("begin rendering NOT to WINDOW");
 }
+fn endRendering() Error!void {
+    const rt = if (current_render_target) |render_target| render_target else return;
+
+    defer current_render_target = null;
+    if (VKWindowContext.fromRenderTarget(rt)) |wc| {
+        try wc.endRendering();
+    } else @panic("end rendering NOT to WINDOW");
+}
+
 //===|implementations|===
 const VKShaderModule = struct {
     vk_handle: vk.ShaderModule = .null_handle,
@@ -244,7 +167,8 @@ const VKCommandBuffer = struct {
 const VKWindowContext = struct {
     const mic = 3; //max_image_count
     const mfif = mic - 1; //max_frame_in_flight
-    image_transition_command_buffer: vk.CommandBuffer = .null_handle,
+    acquired_image_index: u32 = undefined,
+    presentation_cmds: [mfif]vk.CommandBuffer = @splat(.null_handle),
 
     fif_index: u32 = 0, //current frame-in-flight index
 
@@ -266,6 +190,141 @@ const VKWindowContext = struct {
     fences: [mfif]vk.Fence = undefined,
     inline fn fif(self: VKWindowContext) u32 {
         return @max(self.image_count - 1, 1);
+    }
+    var temp_cmd: vk.CommandBuffer = .null_handle;
+    pub fn beginRendering(self: *VKWindowContext, clear_value: ClearValue) Error!void {
+        self.acquireImage() catch
+            return Error.PresentationError;
+        if (temp_cmd == .null_handle) {
+            temp_cmd = try allocCommandBuffer(.graphics, .primary);
+        }
+        device.resetCommandBuffer(temp_cmd, .{}) catch
+            return Error.ResourceCreationError;
+
+        //begin command buffer
+        device.cmdBeginRendering(temp_cmd, &.{
+            .render_area = .{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = self.extent,
+            },
+            .color_attachment_count = 1,
+            .p_color_attachments = &.{.{
+                .image_view = self.image_views[self.acquired_image_index],
+                .image_layout = .attachment_optimal,
+                .load_op = .clear,
+                .store_op = .store,
+                .clear_value = .{ .color = .{ .float_32 = @splat(1) } },
+
+                .resolve_image_layout = .undefined,
+                .resolve_mode = .{},
+            }},
+
+            .flags = .{},
+            .layer_count = 1,
+            .view_mask = 0,
+            // p_depth_attachment: ?*const RenderingAttachmentInfo = null,
+            // p_stencil_attachment: ?*const RenderingAttachmentInfo = null,
+        });
+
+        _ = clear_value;
+    }
+    pub fn endRendering(self: *VKWindowContext) Error!void {
+        device.cmdEndRendering(temp_cmd);
+        //submit cmd
+        // device.queueSubmit(queue(.graphics),1, p_submits: ?[*]const SubmitInfo, fence: Fence)
+        self.present() catch
+            return Error.PresentationError;
+    }
+    fn present(self: VKWindowContext) !void {
+        const cmd = self.presentation_cmds[self.fif_index];
+        try device.resetCommandBuffer(cmd, .{});
+
+        const image_barrier: vk.ImageMemoryBarrier = .{
+            .src_access_mask = .{ .color_attachment_write_bit = true },
+            .dst_access_mask = .{},
+            .old_layout = .undefined,
+            .new_layout = .present_src_khr,
+            .src_queue_family_index = pd().queueFamilyIndex(.presentation),
+            .dst_queue_family_index = pd().queueFamilyIndex(.presentation),
+            .image = self.images[self.acquired_image_index],
+            .subresource_range = .{
+                .aspect_mask = .{ .color_bit = true },
+                .base_mip_level = 0,
+                .level_count = 1,
+                .base_array_layer = 0,
+                .layer_count = 1,
+            },
+        };
+        try device.beginCommandBuffer(cmd, &.{
+            .flags = .{},
+        });
+        device.cmdPipelineBarrier(
+            cmd,
+            .{ .all_commands_bit = true },
+            .{ .bottom_of_pipe_bit = true },
+            .{},
+            0,
+            null,
+            0,
+            null,
+            1,
+            &.{image_barrier},
+        );
+        try device.endCommandBuffer(cmd);
+        try device.queueSubmit(
+            queue(.presentation),
+            1,
+            &.{.{
+                .command_buffer_count = 1,
+                .p_command_buffers = &.{cmd},
+                .p_wait_dst_stage_mask = &.{.{ .color_attachment_output_bit = true }},
+
+                .wait_semaphore_count = 1,
+                .p_wait_semaphores = &.{self.acquire_semaphores[self.fif_index]},
+                .signal_semaphore_count = 1,
+                .p_signal_semaphores = &.{self.submit_semaphores[self.acquired_image_index]},
+            }},
+            self.fences[self.fif_index],
+        );
+
+        _ = device.queuePresentKHR(queue(.presentation), &.{
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = &.{self.submit_semaphores[self.acquired_image_index]},
+            .swapchain_count = 1,
+            .p_swapchains = &.{self.swapchain},
+            .p_image_indices = &.{self.acquired_image_index},
+        }) catch |err|
+            switch (err) {
+                error.OutOfDateKHR => {
+                    @panic("recreate swapchain");
+                    // self.request_recreate = true;
+                },
+                else => return error.PresentationError,
+            };
+    }
+    fn acquireImage(self: *VKWindowContext) !void {
+        _ = try device.waitForFences(
+            1,
+            &.{self.fences[self.fif_index]},
+            .true,
+            timeout,
+        );
+
+        device.resetFences(1, &.{self.fences[self.fif_index]}) catch
+            return Error.PresentationError;
+
+        self.acquired_image_index = (device.acquireNextImageKHR(
+            self.swapchain,
+            timeout,
+            self.acquire_semaphores[self.fif_index],
+            .null_handle,
+        ) catch return Error.PresentationError).image_index;
+        // std.debug.print("II: {}\n", .{window_context.acquired_image_index});
+    }
+    fn fromRenderTarget(render_target: RenderTarget) ?*VKWindowContext {
+        const int: gpu.Handle = @intFromEnum(render_target);
+        if ((int >> 31) == 0) return null;
+        return VKWindowContext.get(@enumFromInt(int & (~@as(gpu.Handle, 0) >> 1)));
     }
     pub fn waitForFence(self: VKWindowContext) !void {
         _ = try device.waitForFences(
@@ -375,6 +434,7 @@ const VKWindowContext = struct {
         for (0..result.fif()) |i| {
             result.acquire_semaphores[i] = try device.createSemaphore(&.{}, vka);
             result.fences[i] = try device.createFence(&.{ .flags = .{ .signaled_bit = true } }, vka);
+            result.presentation_cmds[i] = try allocCommandBuffer(.presentation, .primary);
         }
         for (0..result.image_count) |i|
             result.submit_semaphores[i] = try device.createSemaphore(&.{}, vka);
@@ -393,6 +453,7 @@ const VKWindowContext = struct {
             device.destroySemaphore(self.acquire_semaphores[i], vka);
             device.destroyFence(self.fences[i], vka);
         }
+        device.freeCommandBuffers(commandPool(.presentation) catch unreachable, self.fif(), self.presentation_cmds[0..self.fif()].ptr);
         for (0..self.image_count) |i|
             device.destroySemaphore(self.submit_semaphores[i], vka);
 
@@ -453,6 +514,8 @@ pub fn initBackend() VKError!gpu.Backend {
 }
 
 fn deinit() void {
+    endRendering() catch {};
+
     device.deviceWaitIdle() catch {};
     shader_compiler.deinit();
     for (&command_pools) |cmd_pool| {
@@ -836,9 +899,9 @@ const glfw = huge.Window.glfw;
 const Error = gpu.Error;
 const Pipeline = gpu.Pipeline;
 const ShaderModule = gpu.ShaderModule;
-const CommandBuffer = gpu.CommandBuffer;
 const RenderTarget = gpu.RenderTarget;
 const WindowContext = gpu.WindowContext;
+const ClearValue = gpu.ClearValue;
 const Version = huge.Version;
 const Allocator = std.mem.Allocator;
 const List = std.ArrayList;
@@ -863,12 +926,12 @@ fn versionBackend(version: Version) gpu.Backend {
         .deinit = &deinit,
 
         .draw = &draw,
+        .beginRendering = &beginRendering,
+        .endRendering = &endRendering,
 
         .createPipeline = &createPipeline,
 
-        .present = &present,
         .getWindowRenderTarget = &getWindowRenderTarget,
-
         .createWindowContext = &createWindowContext,
         .destroyWindowContext = &destroyWindowContext,
     };

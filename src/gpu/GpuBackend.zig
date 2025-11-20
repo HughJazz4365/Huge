@@ -9,6 +9,8 @@ api_version: huge.Version = .{},
 deinit: DeinitFn = undefined,
 
 draw: DrawFn = undefined,
+beginRendering: BeginRenderingFn = undefined,
+endRendering: EndRenderingFn = undefined,
 
 createPipeline: CreatePipelineFn = undefined,
 getDefaultPipeline: GetDefaultPipelineFn = undefined,
@@ -21,9 +23,11 @@ createShaderModuleSource: CreateShaderModuleSourceFn = undefined,
 getWindowRenderTarget: GetWindowRenderTargetFn = undefined,
 createWindowContext: CreateWindowContextFn = undefined,
 destroyWindowContext: DestroyWindowContextFn = undefined,
-present: PresentFn = undefined,
 
-pub const DrawFn = *const fn (CommandBuffer, RenderTarget, Pipeline, gpu.DrawParams) Error!void;
+pub const DrawFn = *const fn (Pipeline, gpu.DrawParams) Error!void;
+pub const BeginRenderingFn = *const fn (RenderTarget, gpu.ClearValue) Error!void;
+pub const EndRenderingFn = *const fn () Error!void;
+
 pub const CreatePipelineFn = *const fn ([]const ShaderModule) Error!Pipeline;
 pub const SetPipelinePushConstantFn = *const fn (Pipeline, []const u8, u32, u32, *const anyopaque) Error!void;
 pub const SetPipelineOpaqueUniformFn = *const fn (Pipeline, []const u8, u32, u32, gpu.OpaqueType, gpu.Handle) Error!void;
@@ -34,7 +38,6 @@ pub const GetDefaultPipelineFn = *const fn (gpu.PipelineType) Pipeline;
 pub const GetWindowRenderTargetFn = *const fn (Window) RenderTarget;
 pub const CreateWindowContextFn = *const fn (Window) Error!WindowContext;
 pub const DestroyWindowContextFn = *const fn (WindowContext) void;
-pub const PresentFn = *const fn (Window) Error!void;
 
 pub const DeinitFn = *const fn () void;
 
@@ -43,5 +46,4 @@ const RenderTarget = gpu.RenderTarget;
 const WindowContext = gpu.WindowContext;
 const Pipeline = gpu.Pipeline;
 const ShaderModule = gpu.ShaderModule;
-const CommandBuffer = gpu.CommandBuffer;
 const Error = gpu.Error;

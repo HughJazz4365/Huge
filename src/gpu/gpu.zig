@@ -8,20 +8,17 @@ var backend: Backend = undefined; //default to software renderer??
 
 //=======|methods|=======
 
-pub fn draw(
-    command_buffer: CommandBuffer,
-    render_target: RenderTarget,
-    pipeline: Pipeline,
-    params: DrawParams,
-) Error!void {
-    try backend.draw(command_buffer, render_target, pipeline, params);
+pub fn draw(pipeline: Pipeline, params: DrawParams) Error!void {
+    try backend.draw(pipeline, params);
 }
-pub fn clear(
-    command_buffer: CommandBuffer,
-    render_target: RenderTarget,
-    value: ClearValue,
-) Error!void {
-    try backend.clear(command_buffer, render_target, value);
+pub fn clear(value: ClearValue) Error!void {
+    try backend.clear(value);
+}
+pub fn beginRendering(render_target: RenderTarget, clear_value: ClearValue) Error!void {
+    try backend.beginRendering(render_target, clear_value);
+}
+pub fn endRendering() Error!void {
+    try backend.endRendering();
 }
 pub fn getWindowRenderTarget(window: huge.Window) RenderTarget {
     return backend.getWindowRenderTarget(window);
@@ -31,9 +28,6 @@ pub fn createWindowContext(window: huge.Window) Error!WindowContext {
 }
 pub fn destroyWindowContext(window_context: WindowContext) void {
     backend.destroyWindowContext(window_context);
-}
-pub fn present(window: huge.Window) Error!void {
-    try backend.present(window);
 }
 pub inline fn api() GApi {
     return backend.api;
@@ -114,7 +108,6 @@ pub const FeatureSet = huge.util.StructFromEnum(Feature, bool, false, .@"packed"
 pub const RenderTarget = enum(Handle) { _ };
 
 pub const Buffer = enum(Handle) { _ };
-pub const CommandBuffer = enum(Handle) { _ };
 pub const Texture = enum(Handle) { _ };
 
 pub const ShaderModule = enum(Handle) { _ };
@@ -129,6 +122,7 @@ const max_handle = ~@as(Handle, 0);
 pub const Error = error{
     OutOfMemory,
     ResourceCreationError,
+    NullAccess,
 
     WindowContextCreationError,
     BackendInitializationFailure,
@@ -136,7 +130,4 @@ pub const Error = error{
     ShaderCompilationError,
 
     PresentationError,
-
-    CommadBufferRecordingError,
-    CommadBufferSubmitionError,
 };

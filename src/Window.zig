@@ -15,9 +15,6 @@ context: huge.gpu.WindowContext = undefined,
 pub const FullHD: math.uvec2 = .{ 1920, 1080 };
 pub const HD: math.uvec2 = .{ 1280, 720 };
 
-pub fn present(self: Window) !void {
-    try huge.gpu.present(self);
-}
 pub fn renderTarget(self: Window) huge.gpu.RenderTarget {
     return huge.gpu.getWindowRenderTarget(self);
 }
