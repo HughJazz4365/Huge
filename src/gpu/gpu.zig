@@ -120,6 +120,8 @@ pub const GApi = enum { vulkan, opengl, none };
 const max_handle = ~@as(Handle, 0);
 
 pub const Error = error{
+    Unknown,
+
     OutOfMemory,
     ResourceCreationError,
     NullAccess,
@@ -130,4 +132,5 @@ pub const Error = error{
     ShaderCompilationError,
 
     PresentationError,
+    SynchronisationError,
 };
