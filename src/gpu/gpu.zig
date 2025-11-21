@@ -67,21 +67,33 @@ pub const ClearValue = struct {
 pub const Pipeline = enum(u32) {
     _,
     pub fn createPath(pipeline_source: PipelineSourcePath) Error!Pipeline {
-        _ = pipeline_source;
-        return try backend.createPipeline(&.{});
+        var shader_modules: [max_pipeline_stages]ShaderModule = undefined;
+        const slice = pipeline_source.slice();
+        for (shader_modules[0..slice.len], slice) |*m, source|
+            m.* = try backend.createShaderModulePath(source.path, source.entry_point);
+
+        return try backend.createPipeline(shader_modules[0..slice.len]);
     }
     pub fn setProperty(self: Pipeline, name: []const u8, value: anytype) Error!void {
         const ptr: *const anyopaque = if (@typeInfo(@TypeOf(value)) == .ptr) value else &value;
         try backend.setPipelineProperty(self, name, ptr);
     }
-
-    pub const max_pipeline_stages = 7;
+    pub const max_pipeline_stages = 3;
 };
 pub const OpaqueType = hgsl.OpaqueType;
 pub const PipelineType = enum { surface, compute };
 pub const PipelineSourcePath = union(PipelineType) {
     surface: SurfacePipelineSourcePath,
     compute: ShaderSourcePath,
+    pub fn slice(self: PipelineSourcePath) []const ShaderSourcePath {
+        return switch (self) {
+            .surface => |surface| if (surface.geometry) |geometry|
+                &.{ surface.vertex, surface.fragment, geometry }
+            else
+                &.{ surface.vertex, surface.fragment },
+            .compute => |compute| &.{compute},
+        };
+    }
 };
 pub const SurfacePipelineSourcePath = struct {
     vertex: ShaderSourcePath,

@@ -82,6 +82,10 @@ fn createPipeline(stages: []const ShaderModule) Error!Pipeline {
     try pipeline_list.append(arena.allocator(), .{});
     return handle;
 }
+fn createShaderModulePath(path: []const u8, entry_point: []const u8) Error!ShaderModule {
+    _ = .{ path, entry_point };
+    return @enumFromInt(0);
+}
 fn getWindowRenderTarget(window: huge.Window) RenderTarget {
     return @enumFromInt((1 << 31) | @intFromEnum(window.context));
 }
@@ -603,9 +607,6 @@ fn initInstance(allocator: Allocator, instance_api_version: Version) VKError!voi
 
     const available_instance_extensions: []vk.ExtensionProperties =
         bwp.enumerateInstanceExtensionPropertiesAlloc(null, allocator) catch return VKError.OutOfMemory;
-    // for (available_instance_extensions) |aie| {
-    //     std.debug.print("ext: {s}\n", .{@as([*:0]const u8, @ptrCast(@alignCast(&aie.extension_name)))});
-    // }
 
     try checkExtensionPresence(instance_extensions, available_instance_extensions);
     allocator.free(available_instance_extensions);
@@ -703,9 +704,6 @@ fn initPhysicalDevice(allocator: Allocator, p: *PhysicalDevice, extensions: []co
 
     const available_extensions =
         instance.enumerateDeviceExtensionPropertiesAlloc(p.handle, null, allocator) catch return VKError.OutOfMemory;
-    // for (available_extensions) |aie| {
-    //     std.debug.print("dext: {s}\n", .{@as([*:0]const u8, @ptrCast(@alignCast(&aie.extension_name)))});
-    // }
     try checkExtensionPresence(extensions, available_extensions);
     allocator.free(available_extensions);
 
@@ -748,10 +746,6 @@ fn getQueueFamilyIndices(allocator: Allocator, handle: vk.PhysicalDevice, dummy_
         any_flags,
         minimal_required_queue_family_config,
     )) return VKError.MissingQueueType;
-
-    // inline for (&index_lists, 0..) |l, i| {
-    //     std.debug.print("{s} : {any}\n", .{ @tagName(@as(QueueType, @enumFromInt(i))), l.list.items });
-    // }
 
     //iterate through all the possible queue configurations score them and use the best one
     var non_empty_index_storage: [queue_type_count]usize = undefined;
@@ -946,6 +940,7 @@ fn versionBackend(version: Version) gpu.Backend {
         .endRendering = &endRendering,
 
         .createPipeline = &createPipeline,
+        .createShaderModulePath = &createShaderModulePath,
 
         .getWindowRenderTarget = &getWindowRenderTarget,
         .createWindowContext = &createWindowContext,
