@@ -104,6 +104,12 @@ pub const PipelineOptions = struct {
 pub const PrimitiveTopology = enum {
     triangle,
     triangle_strip,
+    triangle_fan,
+
+    line,
+    line_strip,
+
+    point,
 };
 pub const Cull = enum { none, back, front, both };
 pub const WindingOrder = enum { clockwise, counter_clockwise };

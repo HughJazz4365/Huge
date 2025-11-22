@@ -1105,6 +1105,10 @@ fn castPrimitiveTopology(primitive: gpu.PrimitiveTopology) vk.PrimitiveTopology 
     return switch (primitive) {
         .triangle => .triangle_list,
         .triangle_strip => .triangle_strip,
+        .triangle_fan => .triangle_fan,
+        .line => .line_list,
+        .line_strip => .line_strip,
+        .point => .point_list,
     };
 }
 pub const loader = &struct {
