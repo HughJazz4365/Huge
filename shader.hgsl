@@ -1,6 +1,18 @@
-const vert = entrypoint(.vertex){}
+const vert = entrypoint(.vertex){
+	const verts : [4]vec2 = .{
+		.{1 ,-1},
+		.{-1,-1},
+		.{1 , 1},
+		.{-1, 1},
+	}
+
+	const pos = verts[@vertex_id]
+	@position = .{pos * .{0.75}, 0, 1}
+	out uv = pos * .{0.5} + .{0.5}
+}
 
 const frag = entrypoint(.fragment){
-	push color: vec3, out o: vec4 = ,.{color, 1}
+	in uv : vec2
+	out o : vec4 = .{uv, 1, 1}
 }
 

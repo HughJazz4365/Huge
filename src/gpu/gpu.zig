@@ -66,13 +66,16 @@ pub const ClearValue = struct {
 };
 pub const Pipeline = enum(u32) {
     _,
-    pub fn createPath(pipeline_source: PipelineSourcePath) Error!Pipeline {
+    pub fn createPath(pipeline_source: PipelineSourcePath, opt: PipelineOptions) Error!Pipeline {
         var shader_modules: [max_pipeline_stages]ShaderModule = undefined;
-        const slice = pipeline_source.slice();
-        for (shader_modules[0..slice.len], slice) |*m, source|
-            m.* = try backend.createShaderModulePath(source.path, source.entry_point);
-
-        return try backend.createPipeline(shader_modules[0..slice.len]);
+        var index: usize = 0;
+        while (pipeline_source.next(index)) |ps| {
+            if (index + 1 >= max_pipeline_stages) return Error.ResourceCreationError;
+            shader_modules[index] =
+                try backend.createShaderModulePath(ps.path, ps.entry_point);
+            index += 1;
+        }
+        return try backend.createPipeline(shader_modules[0..index], opt);
     }
     pub fn setProperty(self: Pipeline, name: []const u8, value: anytype) Error!void {
         const ptr: *const anyopaque = if (@typeInfo(@TypeOf(value)) == .ptr) value else &value;
@@ -80,31 +83,68 @@ pub const Pipeline = enum(u32) {
     }
     pub const max_pipeline_stages = 3;
 };
-pub const OpaqueType = hgsl.OpaqueType;
+pub const PipelineOptions = struct {
+    //vertex
+    winding_order: WindingOrder = .clockwise,
+    cull: Cull = .none,
+    primitive: PrimitiveTopology = .triangle,
+    // polygon
+    // .depth_clamp_enable = @intFromBool(false),
+    // .rasterizer_discard_enable = @intFromBool(false),
+    // .polygon_mode = .fill,
+    // .line_width = 1,
+    // .cull_mode = .{ .back_bit = true },
+    // // .cull_mode = .{},
+    // .front_face = .clockwise,
+    // .depth_bias_enable = @intFromBool(false),
+    // .depth_bias_constant_factor = 0,
+    // .depth_bias_clamp = 0,
+    // .depth_bias_slope_factor = 0,
+};
+pub const PrimitiveTopology = enum {
+    triangle,
+    triangle_strip,
+};
+pub const Cull = enum { none, back, front, both };
+pub const WindingOrder = enum { clockwise, counter_clockwise };
+
 pub const PipelineType = enum { surface, compute };
 pub const PipelineSourcePath = union(PipelineType) {
     surface: SurfacePipelineSourcePath,
     compute: ShaderSourcePath,
-    pub fn slice(self: PipelineSourcePath) []const ShaderSourcePath {
+    pub fn next(self: PipelineSourcePath, index: usize) ?ShaderSourcePath {
         return switch (self) {
-            .surface => |surface| if (surface.geometry) |geometry|
-                &.{ surface.vertex, surface.fragment, geometry }
-            else
-                &.{ surface.vertex, surface.fragment },
-            .compute => |compute| &.{compute},
+            .surface => |surface| blk: {
+                var non_null_count: usize = 0;
+                const slice: []const ShaderSourcePath =
+                    &.{ surface.tesselation, surface.vertex, surface.geometry, surface.fragment };
+                break :blk for (slice) |s| {
+                    if (s.isNull()) continue;
+                    if (index == non_null_count) break s;
+
+                    non_null_count += 1;
+                } else null;
+            },
+            .compute => |compute| if (index == 0) compute else null,
         };
     }
 };
 pub const SurfacePipelineSourcePath = struct {
+    tesselation: ShaderSourcePath = ShaderSourcePath._null,
     vertex: ShaderSourcePath,
+    geometry: ShaderSourcePath = ShaderSourcePath._null,
     fragment: ShaderSourcePath,
-    geometry: ?ShaderSourcePath = null,
 };
 pub const ShaderSourcePath = struct {
     path: []const u8,
     entry_point: []const u8,
+    pub const _null: ShaderSourcePath = .{ .path = "", .entry_point = "" };
+    pub fn isNull(self: ShaderSourcePath) bool {
+        return self.path.len == 0;
+    }
 };
 
+pub const OpaqueType = hgsl.OpaqueType;
 pub const Feature = enum {
     geometry_shaders,
     tessellation_shaders,
@@ -117,7 +157,12 @@ pub const Feature = enum {
 pub const FeatureSet = huge.util.StructFromEnum(Feature, bool, false, .@"packed");
 
 //handle types
-pub const RenderTarget = enum(Handle) { _ };
+pub const RenderTarget = enum(Handle) {
+    _,
+    pub fn size(self: RenderTarget) math.uvec2 {
+        return backend.renderTargetSize(self);
+    }
+};
 
 pub const Buffer = enum(Handle) { _ };
 pub const Texture = enum(Handle) { _ };
@@ -142,6 +187,7 @@ pub const Error = error{
     BackendInitializationFailure,
 
     ShaderCompilationError,
+    ShaderEntryPointNotFound,
 
     PresentationError,
     SynchronisationError,

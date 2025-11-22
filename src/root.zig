@@ -1,4 +1,5 @@
 const std = @import("std");
+const zigbuiltin = @import("builtin");
 pub const Window = @import("Window.zig");
 pub const math = @import("math.zig");
 pub const gpu = @import("gpu/gpu.zig");
@@ -9,6 +10,10 @@ pub const time = void;
 pub const name = "huge";
 pub const version: Version = .new(0, 0); //parse from zon;
 pub var initialized = false;
+
+pub fn dassert(ok: bool) void {
+    if (zigbuiltin.mode == .Debug and !ok) @panic("ASSERTION FAILED");
+}
 pub fn init() !void {
     try Window.init();
     try gpu.init();

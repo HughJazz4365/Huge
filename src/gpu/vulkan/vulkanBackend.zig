@@ -1,6 +1,7 @@
 const std = @import("std");
 const zigbuiltin = @import("builtin");
 const huge = @import("../../root.zig");
+const math = huge.math;
 const util = huge.util;
 const gpu = huge.gpu;
 const hgsl = gpu.hgsl;
@@ -12,7 +13,6 @@ pub const vk = @import("vk.zig");
 const u32m = ~@as(u32, 0);
 const timeout: u64 = std.time.ns_per_s * 5;
 const max_queue_family_count = 16;
-const max_physical_devices = 3;
 
 const min_vulkan_version: Version = .{ .major = 1, .minor = 2 };
 const max_vulkan_version: Version = undefined;
@@ -27,7 +27,7 @@ const layers: []const [*:0]const u8 = if (zigbuiltin.mode == .Debug) &.{
 var vka: ?*vk.AllocationCallbacks = null;
 
 var instance: vk.InstanceProxy = undefined;
-var physical_devices: [max_physical_devices]PhysicalDevice = @splat(.{});
+var physical_devices: [3]PhysicalDevice = @splat(.{});
 var valid_physical_device_count: usize = 0;
 var current_physical_device_index: usize = 0;
 var device: vk.DeviceProxy = undefined;
@@ -62,32 +62,158 @@ var current_render_target: ?RenderTarget = null;
 //======|methods|========
 
 fn draw(pipeline: Pipeline, params: gpu.DrawParams) Error!void {
+    huge.dassert(current_render_target != null);
     const rt = if (current_render_target) |render_target| render_target else return;
     const cmd = if (VKWindowContext.fromRenderTarget(rt)) |wc|
         try wc.initRenderingCmd()
     else
         @panic("init rendering cmd NOT of WINDOW");
 
-    // device.cmdBindPipeline(
-    //     cmd,
-    //     .graphics, //bindpoint
-    //     VKPipeline.get(pipeline).vk_handle, //handle
-    // );
-    // device.cmdDraw(cmd, params.count, params.instance_count, params.offset, params.instance_offset);
-    _ = .{ pipeline, params, cmd };
+    device.cmdBindPipeline(cmd, .graphics, VKPipeline.get(pipeline).vk_handle);
+    device.cmdDraw(cmd, params.count, params.instance_count, params.offset, params.instance_offset);
 }
-fn createPipeline(stages: []const ShaderModule) Error!Pipeline {
-    _ = stages;
+fn createPipeline(stages: []const ShaderModule, opt: gpu.PipelineOptions) Error!Pipeline {
+    var vk_handle: vk.Pipeline = .null_handle;
+    var stage_create_infos: [gpu.Pipeline.max_pipeline_stages]vk.PipelineShaderStageCreateInfo = undefined;
+    for (stage_create_infos[0..stages.len], stages) |*ci, s| {
+        const shader_module = VKShaderModule.get(s);
+        const ep_info = shader_module.entry_point_info;
+        ci.* = .{
+            .module = shader_module.vk_handle,
+            .p_name = ep_info.name,
+            .stage = .{
+                .vertex_bit = ep_info.stage_info == .vertex,
+                .fragment_bit = ep_info.stage_info == .fragment,
+            },
+        };
+    }
+    //CHECK stages *compatibility
+
+    const fragment: ?FragmentStageInfo = FragmentStageInfo.fromStageSlice(stages);
+    const vertex: ?VertexStageInfo = VertexStageInfo.fromStageSlice(stages);
+
+    const layout = device.createPipelineLayout(&.{
+        // set_layout_count: u32 = 0,
+        // p_set_layouts: ?[*]const DescriptorSetLayout = null,
+        // push_constant_range_count: u32 = 0,
+        // p_push_constant_ranges: ?[*]const PushConstantRange = null,
+    }, vka) catch return Error.ResourceCreationError;
+
+    _ = device.createGraphicsPipelines(.null_handle, 1, &.{.{
+        .p_next = if (fragment) |frag| &(try frag.pipelineCreationInfo(
+            &.{.b8g8r8a8_unorm},
+            .undefined,
+            .undefined,
+        )) else null,
+        .stage_count = @intCast(stages.len),
+        .p_stages = stage_create_infos[0..stages.len].ptr,
+        .layout = layout,
+
+        .p_vertex_input_state = if (vertex) |vert| &vert.pipelineCreationInfo() else null,
+        .p_input_assembly_state = if (vertex) |_| &.{
+            .topology = castPrimitiveTopology(opt.primitive),
+            .primitive_restart_enable = .false,
+        } else null,
+        // p_tessellation_state: ?*const PipelineTessellationStateCreateInfo = null,
+        .p_viewport_state = if (fragment) |frag| &.{
+            .viewport_count = frag.output_count,
+            .scissor_count = frag.output_count,
+        } else null,
+        // p_rasterization_state: ?*const PipelineRasterizationStateCreateInfo = null,
+        .p_rasterization_state = &.{
+            .depth_clamp_enable = .false,
+            .rasterizer_discard_enable = .false,
+            .polygon_mode = .fill,
+            .line_width = 1,
+            .cull_mode = .{
+                .back_bit = opt.cull == .back or opt.cull == .both,
+                .front_bit = opt.cull == .front or opt.cull == .both,
+            },
+            .front_face = if (opt.winding_order == .clockwise) .clockwise else .counter_clockwise,
+            .depth_bias_enable = .false,
+            .depth_bias_constant_factor = 0,
+            .depth_bias_clamp = 0,
+            .depth_bias_slope_factor = 0,
+        },
+
+        .p_multisample_state = &.{
+            .sample_shading_enable = .false,
+            .rasterization_samples = .{ .@"1_bit" = true },
+            .min_sample_shading = 1,
+            .p_sample_mask = null,
+            .alpha_to_coverage_enable = .false,
+            .alpha_to_one_enable = .false,
+        },
+        // p_depth_stencil_state: ?*const PipelineDepthStencilStateCreateInfo = null,
+        .p_color_blend_state = if (fragment) |frag| &.{
+            .logic_op_enable = .false,
+            .logic_op = .clear,
+            .attachment_count = frag.output_count,
+            .p_attachments = &.{.{
+                .color_write_mask = .{
+                    .r_bit = true,
+                    .b_bit = true,
+                    .g_bit = true,
+                    .a_bit = true,
+                },
+                .blend_enable = .false,
+                .src_color_blend_factor = .one,
+                .dst_color_blend_factor = .zero,
+                .color_blend_op = .add,
+                .src_alpha_blend_factor = .one,
+                .dst_alpha_blend_factor = .zero,
+                .alpha_blend_op = .add,
+            }},
+            .blend_constants = @splat(0),
+        } else null,
+        .p_dynamic_state = &.{
+            .p_dynamic_states = &.{ .viewport, .scissor },
+            .dynamic_state_count = 2,
+        },
+
+        .subpass = 0,
+        .base_pipeline_index = -1,
+        .flags = .{},
+    }}, vka, @ptrCast(&vk_handle)) catch
+        return Error.ResourceCreationError;
+
     const handle: Pipeline = @enumFromInt(@as(gpu.Handle, @intCast(pipeline_list.items.len)));
-    try pipeline_list.append(arena.allocator(), .{});
+    try pipeline_list.append(arena.allocator(), .{
+        .vk_handle = vk_handle,
+        .layout = layout,
+    });
     return handle;
 }
+
 fn createShaderModulePath(path: []const u8, entry_point: []const u8) Error!ShaderModule {
-    _ = .{ path, entry_point };
-    return @enumFromInt(0);
+    const result = shader_compiler.compileFile(path) catch
+        return @enumFromInt(u32m);
+    const vk_handle: vk.ShaderModule = device.createShaderModule(&.{
+        .code_size = result.bytes.len,
+        .p_code = @ptrCast(@alignCast(result.bytes.ptr)),
+    }, vka) catch
+        return Error.OutOfMemory;
+
+    const handle: ShaderModule = @enumFromInt(@as(gpu.Handle, @intCast(shader_module_list.items.len)));
+    try shader_module_list.append(arena.allocator(), .{
+        .vk_handle = vk_handle,
+        .entry_point_info = for (result.entry_point_infos) |ep| {
+            if (util.strEql(entry_point, ep.name)) break ep;
+        } else return Error.ShaderEntryPointNotFound,
+    });
+    return handle;
+}
+fn destroyShaderModule(shader_module: ShaderModule) void {
+    _ = shader_module;
 }
 fn getWindowRenderTarget(window: huge.Window) RenderTarget {
     return @enumFromInt((1 << 31) | @intFromEnum(window.context));
+}
+fn renderTargetSize(render_target: RenderTarget) math.uvec2 {
+    return if (VKWindowContext.fromRenderTarget(render_target)) |wc|
+        .{ wc.extent.width, wc.extent.height }
+    else
+        @panic("render target size of NOT WINDOW");
 }
 fn createWindowContext(window: huge.Window) Error!WindowContext {
     const wc = VKWindowContext.create(window) catch
@@ -123,10 +249,8 @@ fn endRendering() Error!void {
 //===|implementations|===
 const VKShaderModule = struct {
     vk_handle: vk.ShaderModule = .null_handle,
-    stage: gpu.ShaderStage,
 
-    push_constant_mappings: []const hgsl.PushConstantMapping,
-    opaque_uniform_mappings: []const hgsl.OpaqueUniformMapping,
+    entry_point_info: hgsl.EntryPointInfo = undefined,
     pub fn createPath(path: []const u8, entry_point: []const u8) Error!VKShaderModule {
         _ = .{ path, entry_point };
         // const result = shader_compiler.compileFile(path);
@@ -135,15 +259,19 @@ const VKShaderModule = struct {
         if (true) @panic("VKShaderModule.createRaw");
         return try createPath(source, entry_point);
     }
+    pub fn destroy(self: VKShaderModule) void {
+        _ = self;
+    }
 
     pub fn get(handle: ShaderModule) *VKShaderModule {
-        return shader_module_list[@intFromEnum(handle)];
+        return &shader_module_list.items[@intFromEnum(handle)];
     }
 };
 //handle array with functions that have explicit
 //(offset and size) or (binding) args on top of 'name'
 const VKPipeline = struct {
     vk_handle: vk.Pipeline = .null_handle,
+    layout: vk.PipelineLayout = .null_handle,
 
     //descriptor_set
     //stages
@@ -151,6 +279,74 @@ const VKPipeline = struct {
     // and dont care about repeating names)
     pub fn get(handle: Pipeline) *VKPipeline {
         return &pipeline_list.items[@intFromEnum(handle)];
+    }
+    pub fn destroy(self: *VKPipeline) void {
+        device.destroyPipelineLayout(self.layout, vka);
+        device.destroyPipeline(self.vk_handle, vka);
+        self.layout = .null_handle;
+        self.pipeline = .null_handle;
+    }
+};
+const FragmentStageInfo = struct {
+    output_count: u32,
+
+    pub fn fromStageSlice(stages: []const ShaderModule) ?FragmentStageInfo {
+        const ep_info: hgsl.EntryPointInfo = for (stages) |s| {
+            const shader_module: *VKShaderModule = VKShaderModule.get(s);
+            if (shader_module.entry_point_info.stage_info == .fragment)
+                break shader_module.entry_point_info;
+        } else return null;
+        _ = ep_info;
+        return .{
+            .output_count = 1, //TODO: check that
+        };
+    }
+    pub fn pipelineCreationInfo(
+        self: *const FragmentStageInfo,
+        formats: []const vk.Format,
+        depth_format: vk.Format,
+        stencil_format: vk.Format,
+    ) Error!vk.PipelineRenderingCreateInfo {
+        //
+        if (formats.len != self.output_count) return Error.ResourceCreationError;
+        return .{
+            .color_attachment_count = self.output_count,
+            .p_color_attachment_formats = formats.ptr,
+            .depth_attachment_format = depth_format,
+            .stencil_attachment_format = stencil_format,
+            .view_mask = 0,
+        };
+    }
+};
+const VertexStageInfo = struct {
+    attributes: []const vk.VertexInputAttributeDescription = &.{},
+    binding_description: vk.VertexInputBindingDescription,
+    var attribute_storage: [10]vk.VertexInputAttributeDescription = undefined;
+
+    pub fn fromStageSlice(stages: []const ShaderModule) ?VertexStageInfo {
+        const ep_info: hgsl.EntryPointInfo = for (stages) |s| {
+            const shader_module: *VKShaderModule = .get(s);
+            if (shader_module.entry_point_info.stage_info == .vertex)
+                break shader_module.entry_point_info;
+        } else return null;
+        _ = ep_info;
+        return .{
+            .attributes = &.{},
+            .binding_description = .{
+                .binding = 0,
+                //aligment param for that in PipelineOptions
+                .stride = 0,
+                .input_rate = .vertex,
+            },
+        };
+    }
+    pub fn pipelineCreationInfo(self: *const VertexStageInfo) vk.PipelineVertexInputStateCreateInfo {
+        return .{
+            .vertex_binding_description_count = 1,
+            .p_vertex_binding_descriptions = &.{self.binding_description},
+            .vertex_attribute_description_count = @intCast(self.attributes.len),
+            .p_vertex_attribute_descriptions = self.attributes.ptr,
+        };
     }
 };
 
@@ -196,6 +392,7 @@ const VKWindowContext = struct {
         self.fif_index = (self.fif_index + 1) % self.fif();
     }
     pub fn initRenderingCmd(self: *VKWindowContext) Error!vk.CommandBuffer {
+        const rt = if (current_render_target) |render_target| render_target else return Error.Unknown;
         const cmd = try self.getRenderingCmd(.graphics);
         if (~self.acquired_image_index != 0) return cmd;
 
@@ -214,6 +411,19 @@ const VKWindowContext = struct {
             return Error.ResourceCreationError;
 
         device.beginCommandBuffer(cmd, &.{}) catch return Error.Unknown;
+        const rt_size = renderTargetSize(rt);
+        device.cmdSetScissor(cmd, 0, 1, &.{.{
+            .extent = .{ .width = rt_size[0], .height = rt_size[1] },
+            .offset = .{ .x = 0, .y = 0 },
+        }});
+        device.cmdSetViewport(cmd, 0, 1, &.{.{
+            .x = 0,
+            .y = 0,
+            .width = @floatFromInt(rt_size[0]),
+            .height = @floatFromInt(rt_size[1]),
+            .min_depth = 0,
+            .max_depth = 1,
+        }});
         device.cmdBeginRendering(cmd, &.{
             .render_area = .{
                 .offset = .{ .x = 0, .y = 0 },
@@ -637,8 +847,8 @@ fn initPhysicalDevices(allocator: Allocator, extensions: []const [*:0]const u8) 
 
     if (count == 0) return error.PhysicalDeviceInitializationFailure;
 
-    count = @min(max_physical_devices, count);
-    var physical_device_handles: [max_physical_devices]vk.PhysicalDevice = undefined;
+    count = @min(physical_devices.len, count);
+    var physical_device_handles: [physical_devices.len]vk.PhysicalDevice = undefined;
     _ = instance.enumeratePhysicalDevices(&count, &physical_device_handles) catch
         return VKError.PhysicalDeviceInitializationFailure;
     for (&physical_devices, &physical_device_handles) |*p, *ph| p.handle = ph.*;
@@ -891,6 +1101,12 @@ pub const minimal_required_queue_family_config: QueueConfiguration = .{
 pub const QueueType = enum(u8) { graphics, presentation, compute, transfer, sparse_binding, protected, video_decode, video_encode };
 
 //=======================
+fn castPrimitiveTopology(primitive: gpu.PrimitiveTopology) vk.PrimitiveTopology {
+    return switch (primitive) {
+        .triangle => .triangle_list,
+        .triangle_strip => .triangle_strip,
+    };
+}
 pub const loader = &struct {
     pub fn l(i: vk.Instance, name: [*:0]const u8) ?glfw.VKproc {
         return glfw.getInstanceProcAddress(@intFromEnum(i), name);
@@ -941,7 +1157,9 @@ fn versionBackend(version: Version) gpu.Backend {
 
         .createPipeline = &createPipeline,
         .createShaderModulePath = &createShaderModulePath,
+        .destroyShaderModule = &destroyShaderModule,
 
+        .renderTargetSize = &renderTargetSize,
         .getWindowRenderTarget = &getWindowRenderTarget,
         .createWindowContext = &createWindowContext,
         .destroyWindowContext = &destroyWindowContext,

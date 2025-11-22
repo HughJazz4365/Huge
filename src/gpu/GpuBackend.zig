@@ -17,9 +17,11 @@ getDefaultPipeline: GetDefaultPipelineFn = undefined,
 setPipelinePushConstant: SetPipelinePushConstantFn = undefined,
 setPipelineOpaqueUniform: SetPipelineOpaqueUniformFn = undefined,
 
-createShaderModulePath: CreateShaderModulePathFn = undefined,
-createShaderModuleSource: CreateShaderModuleSourceFn = undefined,
+createShaderModulePath: CreateShaderModuleFn = undefined,
+createShaderModuleSource: CreateShaderModuleFn = undefined,
+destroyShaderModule: DestroyShaderModuleFn = undefined,
 
+renderTargetSize: RenderTargetSizeFn = undefined,
 getWindowRenderTarget: GetWindowRenderTargetFn = undefined,
 createWindowContext: CreateWindowContextFn = undefined,
 destroyWindowContext: DestroyWindowContextFn = undefined,
@@ -28,13 +30,16 @@ pub const DrawFn = *const fn (Pipeline, gpu.DrawParams) Error!void;
 pub const BeginRenderingFn = *const fn (RenderTarget, gpu.ClearValue) Error!void;
 pub const EndRenderingFn = *const fn () Error!void;
 
-pub const CreatePipelineFn = *const fn ([]const ShaderModule) Error!Pipeline;
+pub const CreatePipelineFn = *const fn ([]const ShaderModule, gpu.PipelineOptions) Error!Pipeline;
 pub const SetPipelinePushConstantFn = *const fn (Pipeline, []const u8, u32, u32, *const anyopaque) Error!void;
 pub const SetPipelineOpaqueUniformFn = *const fn (Pipeline, []const u8, u32, u32, gpu.OpaqueType, gpu.Handle) Error!void;
-pub const CreateShaderModulePathFn = *const fn (path: []const u8, entry_point: []const u8) Error!ShaderModule;
-pub const CreateShaderModuleSourceFn = *const fn (source: []const u8, entry_point: []const u8) Error!ShaderModule;
+
+pub const CreateShaderModuleFn = *const fn ([]const u8, []const u8) Error!ShaderModule;
+pub const DestroyShaderModuleFn = *const fn (ShaderModule) void;
 
 pub const GetDefaultPipelineFn = *const fn (gpu.PipelineType) Pipeline;
+
+pub const RenderTargetSizeFn = *const fn (RenderTarget) huge.math.uvec2;
 pub const GetWindowRenderTargetFn = *const fn (Window) RenderTarget;
 pub const CreateWindowContextFn = *const fn (Window) Error!WindowContext;
 pub const DestroyWindowContextFn = *const fn (WindowContext) void;

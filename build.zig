@@ -8,9 +8,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .root_source_file = b.path("src/root.zig"),
-        .imports = &.{.{ .name = "hgsl", .module = b.dependency("hgsl", .{
-            .optimize = optimize,
-        }).module("hgsl") }},
+        .imports = &.{.{
+            .name = "hgsl",
+            .module = b.dependency("hgsl", .{
+                // .optimize = .ReleaseSmall,
+                .optimize = optimize,
+            }).module("hgsl"),
+        }},
     });
     const glfw = b.dependency("zglfw", .{});
     lib.addImport("glfw", glfw.module("root"));
