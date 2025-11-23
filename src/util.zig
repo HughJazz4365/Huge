@@ -1,4 +1,14 @@
 const std = @import("std");
+const huge = @import("root.zig");
+const math = huge.math;
+
+pub fn f32fromBool(b: bool) f32 {
+    return @floatFromInt(@intFromBool(b));
+}
+pub fn aspectRatioSize(size: math.uvec2) f32 {
+    const v: math.vec2 = @floatFromInt(size);
+    return v[0] / v[1];
+}
 pub fn strEql(a: []const u8, b: []const u8) bool {
     return if (a.len == b.len) std.mem.eql(u8, a, b) else false;
 }

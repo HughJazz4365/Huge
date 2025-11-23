@@ -1,18 +1,19 @@
 const vert = entrypoint(.vertex){
-	const verts : [4]vec2 = .{
-		.{1 ,-1},
-		.{-1,-1},
-		.{1 , 1},
-		.{-1, 1},
-	}
+	push vp, model : mat4
+	in pos, normal,
+	out(.flat) out_normal : vec3 = ,,normal
 
-	const pos = verts[@vertex_id]
-	@position = .{pos * .{0.75}, 0, 1}
-	out uv = pos * .{0.5} + .{0.5}
+	@position = vp * model * vec4{pos, 1} 
+	//@position = vec4{pos, 1} 
+
 }
 
 const frag = entrypoint(.fragment){
-	in uv : vec2
-	out o : vec4 = .{uv, 1, 1}
+	in(.flat) normal: vec3
+
+	const light_dir  = |vec3{3, -9, -1}
+	const diffuse = normal *** -light_dir
+
+	out o : vec4 = .{vec3{diffuse}, 1}
 }
 

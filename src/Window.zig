@@ -11,17 +11,73 @@ handle: Handle = undefined,
 title: [:0]const u8,
 
 context: huge.gpu.WindowContext = undefined,
+current_input_mask: [input_mask_len]usize = @splat(0),
+last_input_mask: [input_mask_len]usize = @splat(0),
+const input_mask_len = (512 / 8) / @sizeOf(usize);
 
-pub const FullHD: math.uvec2 = .{ 1920, 1080 };
-pub const HD: math.uvec2 = .{ 1280, 720 };
+pub const FullHD: Size = .{ 1920, 1080 };
+pub const HD: Size = .{ 1280, 720 };
 
+/// exaple tick function that querries input
+/// and returns whether execution should continue
+pub fn tick(self: *Window) bool {
+    const should = self.shouldClose();
+    if (should) return false;
+    pollEvents();
+    huge.time.tick();
+    self.querryInput();
+    return true;
+}
+
+// test 3d movement input (wasd - wars)
+pub fn warsudVector(self: *const Window) math.vec3 {
+    return .{
+        util.f32fromBool(self.getKey(.s, .hold)) -
+            util.f32fromBool(self.getKey(.a, .hold)),
+        util.f32fromBool(self.getKey(.space, .hold)) -
+            util.f32fromBool(self.getKey(.leftShift, .hold)),
+        util.f32fromBool(self.getKey(.w, .hold)) -
+            util.f32fromBool(self.getKey(.r, .hold)),
+    };
+}
+
+pub fn getKey(self: *const Window, key: Key, action: KeyAction) bool {
+    const index = @as(usize, @intFromEnum(key)) / (@sizeOf(usize) * 8);
+    const bit = @as(usize, @intFromEnum(key)) % (@sizeOf(usize) * 8);
+    const current = self.current_input_mask[index] & (@as(usize, 1) << @truncate(bit)) > 0;
+    const last = self.last_input_mask[index] & (@as(usize, 1) << @truncate(bit)) > 0;
+    return switch (action) {
+        .hold => current,
+        .up => !current,
+        .press => current & !last,
+    };
+}
+pub const KeyAction = enum { press, hold, up };
+
+pub fn querryInput(self: *Window) void {
+    self.last_input_mask = self.current_input_mask;
+    self.current_input_mask = @splat(0);
+    inline for (@typeInfo(Key).@"enum".fields) |ef| {
+        const index = @as(usize, ef.value) / (@sizeOf(usize) * 8);
+        const bit = @as(usize, ef.value) % (@sizeOf(usize) * 8);
+        const is_pressed = glfw.getKey(self.handle, ef.value) != glfw.Release;
+        self.current_input_mask[index] |= @as(usize, @intFromBool(is_pressed)) << bit;
+    }
+}
+
+pub fn aspectRatio(self: Window) f32 {
+    return huge.util.aspectRatioSize(self.size());
+}
+pub fn size(self: Window) Size {
+    var storage: math.cint2 = @splat(0);
+    glfw.getWindowSize(self.handle, &storage[0], &storage[1]);
+    return @intCast(storage);
+}
+pub fn update(self: Window) void {
+    self.context.update();
+}
 pub fn renderTarget(self: Window) huge.gpu.RenderTarget {
     return huge.gpu.getWindowRenderTarget(self);
-}
-pub fn shouldClosePoll(self: Window) bool {
-    const should = self.shouldClose();
-    if (!should) pollEvents();
-    return should;
 }
 pub fn shouldClose(self: Window) bool {
     return glfw.windowShouldClose(self.handle);
@@ -111,6 +167,8 @@ pub fn createDummy(instance: glfw.VkInstance) !DummyWindow {
 pub const DummyWindow = struct { handle: *glfw.Window, surface_handle: glfw.VkSurfaceKHR };
 pub fn init() !void {
     glfw.terminate();
+    //force x11
+    // glfw.initHint(glfw.Platform, glfw.PlatformX11);
     try glfw.init();
     defaultWindowHints();
 }
@@ -124,10 +182,11 @@ fn defaultWindowHints() void {
     glfw.windowHint(glfw.Focused, @intFromBool(true));
 }
 pub const terminate = glfw.terminate;
+const Size = math.uvec2;
 
 pub const Attributes = struct {
     title: [:0]const u8 = "huge",
-    size: math.uvec2 = .{ 800, 600 },
+    size: Size = .{ 800, 600 },
 
     resizable: bool = false,
     floating: bool = false,
@@ -139,3 +198,124 @@ pub const Attributes = struct {
 pub const Error = error{
     ContextCreationError,
 } || glfw.GLFWError;
+const Key = enum(u9) {
+    space = glfw.KeySpace,
+    apostrophe = glfw.KeyApostrophe,
+    comma = glfw.KeyComma,
+    minus = glfw.KeyMinus,
+    period = glfw.KeyPeriod,
+    slash = glfw.KeySlash,
+    num0 = glfw.KeyNum0,
+    num1 = glfw.KeyNum1,
+    num2 = glfw.KeyNum2,
+    num3 = glfw.KeyNum3,
+    num4 = glfw.KeyNum4,
+    num5 = glfw.KeyNum5,
+    num6 = glfw.KeyNum6,
+    num7 = glfw.KeyNum7,
+    num8 = glfw.KeyNum8,
+    num9 = glfw.KeyNum9,
+    semicolon = glfw.KeySemicolon,
+    equal = glfw.KeyEqual,
+    a = glfw.KeyA,
+    b = glfw.KeyB,
+    c = glfw.KeyC,
+    d = glfw.KeyD,
+    e = glfw.KeyE,
+    f = glfw.KeyF,
+    g = glfw.KeyG,
+    h = glfw.KeyH,
+    i = glfw.KeyI,
+    j = glfw.KeyJ,
+    k = glfw.KeyK,
+    l = glfw.KeyL,
+    m = glfw.KeyM,
+    n = glfw.KeyN,
+    o = glfw.KeyO,
+    p = glfw.KeyP,
+    q = glfw.KeyQ,
+    r = glfw.KeyR,
+    s = glfw.KeyS,
+    t = glfw.KeyT,
+    u = glfw.KeyU,
+    v = glfw.KeyV,
+    w = glfw.KeyW,
+    x = glfw.KeyX,
+    y = glfw.KeyY,
+    z = glfw.KeyZ,
+    leftBracket = glfw.KeyLeftBracket,
+    backslash = glfw.KeyBackslash,
+    rightBracket = glfw.KeyRightBracket,
+    graveAccent = glfw.KeyGraveAccent,
+    world1 = glfw.KeyWorld1,
+    world2 = glfw.KeyWorld2,
+    escape = glfw.KeyEscape,
+    enter = glfw.KeyEnter,
+    tab = glfw.KeyTab,
+    backspace = glfw.KeyBackspace,
+    insert = glfw.KeyInsert,
+    delete = glfw.KeyDelete,
+    right = glfw.KeyRight,
+    left = glfw.KeyLeft,
+    down = glfw.KeyDown,
+    up = glfw.KeyUp,
+    pageUp = glfw.KeyPageUp,
+    pageDown = glfw.KeyPageDown,
+    home = glfw.KeyHome,
+    end = glfw.KeyEnd,
+    capsLock = glfw.KeyCapsLock,
+    scrollLock = glfw.KeyScrollLock,
+    numLock = glfw.KeyNumLock,
+    printScreen = glfw.KeyPrintScreen,
+    pause = glfw.KeyPause,
+    f1 = glfw.KeyF1,
+    f2 = glfw.KeyF2,
+    f3 = glfw.KeyF3,
+    f4 = glfw.KeyF4,
+    f5 = glfw.KeyF5,
+    f6 = glfw.KeyF6,
+    f7 = glfw.KeyF7,
+    f8 = glfw.KeyF8,
+    f9 = glfw.KeyF9,
+    f10 = glfw.KeyF10,
+    f11 = glfw.KeyF11,
+    f12 = glfw.KeyF12,
+    f13 = glfw.KeyF13,
+    f14 = glfw.KeyF14,
+    f15 = glfw.KeyF15,
+    f16 = glfw.KeyF16,
+    f17 = glfw.KeyF17,
+    f18 = glfw.KeyF18,
+    f19 = glfw.KeyF19,
+    f20 = glfw.KeyF20,
+    f21 = glfw.KeyF21,
+    f22 = glfw.KeyF22,
+    f23 = glfw.KeyF23,
+    f24 = glfw.KeyF24,
+    f25 = glfw.KeyF25,
+    kp0 = glfw.KeyKp0,
+    kp1 = glfw.KeyKp1,
+    kp2 = glfw.KeyKp2,
+    kp3 = glfw.KeyKp3,
+    kp4 = glfw.KeyKp4,
+    kp5 = glfw.KeyKp5,
+    kp6 = glfw.KeyKp6,
+    kp7 = glfw.KeyKp7,
+    kp8 = glfw.KeyKp8,
+    kp9 = glfw.KeyKp9,
+    kpDecimal = glfw.KeyKpDecimal,
+    kpDivide = glfw.KeyKpDivide,
+    kpMultiply = glfw.KeyKpMultiply,
+    kpSubtract = glfw.KeyKpSubtract,
+    kpAdd = glfw.KeyKpAdd,
+    kpEnter = glfw.KeyKpEnter,
+    kpEqual = glfw.KeyKpEqual,
+    leftShift = glfw.KeyLeftShift,
+    leftControl = glfw.KeyLeftControl,
+    leftAlt = glfw.KeyLeftAlt,
+    leftSuper = glfw.KeyLeftSuper,
+    rightShift = glfw.KeyRightShift,
+    rightControl = glfw.KeyRightControl,
+    rightAlt = glfw.KeyRightAlt,
+    rightSuper = glfw.KeyRightSuper,
+};

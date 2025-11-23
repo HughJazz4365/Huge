@@ -17,6 +17,7 @@ const max_queue_family_count = 16;
 const min_vulkan_version: Version = .{ .major = 1, .minor = 2 };
 const max_vulkan_version: Version = undefined;
 
+const max_push_constant_bytes = 128;
 const layers: []const [*:0]const u8 = if (zigbuiltin.mode == .Debug) &.{
     "VK_LAYER_KHRONOS_validation",
     // "VK_LAYER_LUNARG_api_dump",
@@ -53,6 +54,7 @@ var shader_compiler: hgsl.Compiler = undefined;
 
 var shader_module_list: List(VKShaderModule) = .empty;
 var pipeline_list: List(VKPipeline) = .empty;
+var buffer_list: List(VKBuffer) = .empty;
 
 var window_context_primary: VKWindowContext = undefined;
 var window_context_list: List(VKWindowContext) = .empty;
@@ -61,32 +63,153 @@ var window_context_count: u32 = 0;
 var current_render_target: ?RenderTarget = null;
 //======|methods|========
 
-fn draw(pipeline: Pipeline, params: gpu.DrawParams) Error!void {
-    huge.dassert(current_render_target != null);
-    const rt = if (current_render_target) |render_target| render_target else return;
-    const cmd = if (VKWindowContext.fromRenderTarget(rt)) |wc|
-        try wc.initRenderingCmd()
-    else
-        @panic("init rendering cmd NOT of WINDOW");
+fn draw(handle: Pipeline, params: gpu.DrawParams) Error!void {
+    _, const cmd = if (try getRenderingResources()) |r| r else return;
+    errdefer forceEndRendering();
 
-    device.cmdBindPipeline(cmd, .graphics, VKPipeline.get(pipeline).vk_handle);
-    device.cmdDraw(cmd, params.count, params.instance_count, params.offset, params.instance_offset);
+    device.cmdBindPipeline(cmd, .graphics, VKPipeline.get(handle).vk_handle);
+    if (params.indexed_vertex_offset) |vo| {
+        device.cmdDrawIndexed(
+            cmd,
+            params.count,
+            params.instance_count,
+            params.offset,
+            vo,
+            params.instance_offset,
+        );
+    } else device.cmdDraw(
+        cmd,
+        params.count,
+        params.instance_count,
+        params.offset,
+        params.instance_offset,
+    );
+}
+fn bindIndexBuffer(handle: Buffer, index_type: gpu.IndexType) Error!void {
+    _, const cmd = if (try getRenderingResources()) |r| r else return;
+    errdefer forceEndRendering();
+
+    const buffer: *VKBuffer = .get(handle);
+    if (buffer.usage != .index) return Error.BufferMisuse;
+
+    if (api_version.minor < 4 and index_type == .u8)
+        @panic("TODO: index_type u8 extension");
+    device.cmdBindIndexBuffer(cmd, buffer.vk_handle, 0, switch (index_type) {
+        .u32 => .uint32,
+        .u16 => .uint16,
+        .u8 => .uint8, //only in core spec from 1_4
+    });
+}
+fn bindVertexBuffer(handle: Buffer) Error!void {
+    _, const cmd = if (try getRenderingResources()) |r| r else return;
+    errdefer forceEndRendering();
+
+    const buffer: *VKBuffer = .get(handle);
+    if (buffer.usage != .vertex) return Error.BufferMisuse;
+
+    device.cmdBindVertexBuffers(cmd, 0, 1, &.{buffer.vk_handle}, &.{0});
+}
+fn beginRendering(render_target: RenderTarget, clear_value: ClearValue) Error!void {
+    if (current_render_target) |_| try endRendering();
+
+    current_render_target = render_target;
+    if (VKWindowContext.fromRenderTarget(render_target)) |wc| {
+        try wc.setRenderTargetState(clear_value);
+    } else @panic("begin rendering NOT to WINDOW");
+}
+fn endRendering() Error!void {
+    const rt = if (current_render_target) |render_target| render_target else return;
+    defer current_render_target = null;
+
+    if (VKWindowContext.fromRenderTarget(rt)) |wc| {
+        try wc.endRendering();
+    } else @panic("end rendering NOT to WINDOW");
+}
+
+fn forceEndRendering() void {
+    const rt = if (current_render_target) |render_target| render_target else return;
+    defer current_render_target = null;
+
+    if (VKWindowContext.fromRenderTarget(rt)) |wc| {
+        wc.forceEndRendering();
+    } else @panic("end rendering URGENT NOT to WINDOW");
+}
+
+// setPipelineOpaqueUniform: SetPipelineOpaqueUniformFn = undefined,
+fn pipelinePushConstant(
+    handle: Pipeline,
+    name: []const u8,
+    local_offset: u32,
+    local_size: u32,
+    ptr: *const anyopaque,
+) Error!void {
+    _ = .{ local_offset, local_size };
+    _, const cmd = if (try getRenderingResources()) |r| r else return;
+    const pipeline: *VKPipeline = .get(handle);
+
+    var offsets: [Pipeline.max_pipeline_stages]u32 = undefined;
+    var offset_count: u32 = 0;
+    for (pipeline.entry_point_info_storage[0..pipeline.stage_count]) |ep_info| {
+        pcloop: for (ep_info.push_constant_mappings) |pc| {
+            if (util.strEql(name, pc.name)) {
+                if (pc.offset + pc.size > max_push_constant_bytes)
+                    return Error.ShaderPushConstantOutOfBounds;
+                //dont repeat cmdPushConstants call with the same offset
+                for (offsets[0..offset_count]) |o| if (o == pc.offset) continue :pcloop;
+
+                offsets[offset_count] = pc.offset;
+                offset_count += 1;
+
+                var stage_flags: vk.Flags = 0;
+                for (pipeline.push_constant_ranges[0..pipeline.push_constant_range_count]) |r| {
+                    if (r.size < pc.offset + pc.size) break;
+                    stage_flags |= r.stage_flags.toInt();
+                }
+                // const bytes: []const u8 = @as([*]const u8, @ptrCast(ptr))[0..pc.size];
+                // if (pc.size & 3 == 0)
+                //     std.debug.print("floats: {any}\n", .{@as([]const f32, @ptrCast(@alignCast(bytes)))});
+                device.cmdPushConstants(
+                    cmd,
+                    pipeline.layout,
+                    @bitCast(stage_flags),
+                    pc.offset,
+                    pc.size,
+                    ptr,
+                );
+            }
+        }
+        //log if didnt found
+        //for opaque uniform
+    }
 }
 fn createPipeline(stages: []const ShaderModule, opt: gpu.PipelineOptions) Error!Pipeline {
-    var vk_handle: vk.Pipeline = .null_handle;
-    var stage_create_infos: [gpu.Pipeline.max_pipeline_stages]vk.PipelineShaderStageCreateInfo = undefined;
-    for (stage_create_infos[0..stages.len], stages) |*ci, s| {
-        const shader_module = VKShaderModule.get(s);
+    var pipeline: VKPipeline = .{};
+    const mps = gpu.Pipeline.max_pipeline_stages;
+    var stage_create_infos: [mps]vk.PipelineShaderStageCreateInfo = undefined;
+
+    for (0..stages.len) |i| {
+        const shader_module: *VKShaderModule = .get(stages[i]);
         const ep_info = shader_module.entry_point_info;
-        ci.* = .{
+        const stage_flags = getStageFlags(ep_info.stage_info);
+        stage_create_infos[i] = .{
             .module = shader_module.vk_handle,
             .p_name = ep_info.name,
-            .stage = .{
-                .vertex_bit = ep_info.stage_info == .vertex,
-                .fragment_bit = ep_info.stage_info == .fragment,
-            },
+            .stage = stage_flags,
         };
+        pipeline.entry_point_info_storage[i] = ep_info;
+        pipeline.stage_count = @intCast(stages.len);
+
+        if (ep_info.push_constant_mappings.len != 0) {
+            const last_pc = ep_info.push_constant_mappings[ep_info.push_constant_mappings.len - 1];
+            pipeline.push_constant_ranges[pipeline.push_constant_range_count] = .{
+                .stage_flags = stage_flags,
+                .offset = 0,
+                .size = last_pc.offset + last_pc.size,
+            };
+            pipeline.push_constant_range_count += 1;
+        }
     }
+    pipeline.sortRanges();
     //CHECK stages *compatibility
 
     const fragment: ?FragmentStageInfo = FragmentStageInfo.fromStageSlice(stages);
@@ -95,9 +218,10 @@ fn createPipeline(stages: []const ShaderModule, opt: gpu.PipelineOptions) Error!
     const layout = device.createPipelineLayout(&.{
         // set_layout_count: u32 = 0,
         // p_set_layouts: ?[*]const DescriptorSetLayout = null,
-        // push_constant_range_count: u32 = 0,
-        // p_push_constant_ranges: ?[*]const PushConstantRange = null,
+        .push_constant_range_count = pipeline.push_constant_range_count,
+        .p_push_constant_ranges = &pipeline.push_constant_ranges,
     }, vka) catch return Error.ResourceCreationError;
+    pipeline.layout = layout;
 
     _ = device.createGraphicsPipelines(.null_handle, 1, &.{.{
         .p_next = if (fragment) |frag| &(try frag.pipelineCreationInfo(
@@ -109,7 +233,12 @@ fn createPipeline(stages: []const ShaderModule, opt: gpu.PipelineOptions) Error!
         .p_stages = stage_create_infos[0..stages.len].ptr,
         .layout = layout,
 
-        .p_vertex_input_state = if (vertex) |vert| &vert.pipelineCreationInfo() else null,
+        .p_vertex_input_state = if (vertex) |vert| &.{
+            .vertex_binding_description_count = 1,
+            .p_vertex_binding_descriptions = &.{vert.binding_description},
+            .vertex_attribute_description_count = @intCast(vert.attributes.len),
+            .p_vertex_attribute_descriptions = vert.attributes.ptr,
+        } else null,
         .p_input_assembly_state = if (vertex) |_| &.{
             .topology = castPrimitiveTopology(opt.primitive),
             .primitive_restart_enable = .false,
@@ -174,14 +303,11 @@ fn createPipeline(stages: []const ShaderModule, opt: gpu.PipelineOptions) Error!
         .subpass = 0,
         .base_pipeline_index = -1,
         .flags = .{},
-    }}, vka, @ptrCast(&vk_handle)) catch
+    }}, vka, @ptrCast(&pipeline.vk_handle)) catch
         return Error.ResourceCreationError;
 
     const handle: Pipeline = @enumFromInt(@as(gpu.Handle, @intCast(pipeline_list.items.len)));
-    try pipeline_list.append(arena.allocator(), .{
-        .vk_handle = vk_handle,
-        .layout = layout,
-    });
+    try pipeline_list.append(arena.allocator(), pipeline);
     return handle;
 }
 
@@ -206,15 +332,55 @@ fn createShaderModulePath(path: []const u8, entry_point: []const u8) Error!Shade
 fn destroyShaderModule(shader_module: ShaderModule) void {
     _ = shader_module;
 }
-fn getWindowRenderTarget(window: huge.Window) RenderTarget {
-    return @enumFromInt((1 << 31) | @intFromEnum(window.context));
+fn loadBuffer(handle: Buffer, bytes: []const u8, offset: usize) Error!void {
+    const mapped = try mapBuffer(handle, bytes.len, offset);
+    @memcpy(mapped, bytes);
+    defer unmapBuffer(handle);
 }
+fn mapBuffer(handle: Buffer, bytes: usize, offset: usize) Error![]u8 {
+    const buffer: *VKBuffer = .get(handle);
+    if (buffer.mapped) return Error.MemoryRemap;
+
+    if (bytes > buffer.size) return Error.OutOfMemory;
+    const ptr = (device.mapMemory(buffer.device_memory, offset, @intCast(bytes), .{}) catch
+        return Error.OutOfMemory) orelse
+        return Error.OutOfMemory;
+    buffer.mapped = true;
+    return @as([*]u8, @ptrCast(ptr))[0..bytes];
+}
+fn unmapBuffer(handle: Buffer) void {
+    const buffer: *VKBuffer = .get(handle);
+    if (!buffer.mapped) return;
+
+    device.unmapMemory(buffer.device_memory);
+    buffer.mapped = false;
+}
+fn createBuffer(size: usize, usage: BufferUsage) Error!Buffer {
+    const buffer = try VKBuffer.create(@intCast(size), usage);
+    const handle: Buffer = @enumFromInt(@as(gpu.Handle, @intCast(buffer_list.items.len)));
+    try buffer_list.append(arena.allocator(), buffer);
+    return handle;
+}
+fn destroyBuffer(handle: Buffer) void {
+    const buffer: *VKBuffer = .get(handle);
+    buffer.destroy();
+}
+
 fn renderTargetSize(render_target: RenderTarget) math.uvec2 {
     return if (VKWindowContext.fromRenderTarget(render_target)) |wc|
         .{ wc.extent.width, wc.extent.height }
     else
         @panic("render target size of NOT WINDOW");
 }
+
+fn updateWindowContext(handle: WindowContext) void {
+    _ = handle;
+}
+
+fn getWindowRenderTarget(window: huge.Window) RenderTarget {
+    return @enumFromInt((1 << 31) | @intFromEnum(window.context));
+}
+
 fn createWindowContext(window: huge.Window) Error!WindowContext {
     const wc = VKWindowContext.create(window) catch
         return Error.WindowContextCreationError;
@@ -228,22 +394,6 @@ fn createWindowContext(window: huge.Window) Error!WindowContext {
 fn destroyWindowContext(handle: WindowContext) void {
     const window_context = VKWindowContext.get(handle);
     window_context.destroy();
-}
-fn beginRendering(render_target: RenderTarget, clear_value: ClearValue) Error!void {
-    if (current_render_target) |_| try endRendering();
-
-    current_render_target = render_target;
-    if (VKWindowContext.fromRenderTarget(render_target)) |wc| {
-        try wc.setRenderTargetState(clear_value);
-    } else @panic("begin rendering NOT to WINDOW");
-}
-fn endRendering() Error!void {
-    const rt = if (current_render_target) |render_target| render_target else return;
-    defer current_render_target = null;
-
-    if (VKWindowContext.fromRenderTarget(rt)) |wc| {
-        try wc.endRendering();
-    } else @panic("end rendering NOT to WINDOW");
 }
 
 //===|implementations|===
@@ -273,6 +423,11 @@ const VKPipeline = struct {
     vk_handle: vk.Pipeline = .null_handle,
     layout: vk.PipelineLayout = .null_handle,
 
+    stage_count: u32 = 0,
+    entry_point_info_storage: [Pipeline.max_pipeline_stages]hgsl.EntryPointInfo = undefined,
+    push_constant_ranges: [Pipeline.max_pipeline_stages]vk.PushConstantRange = undefined,
+    push_constant_range_count: u32 = 0,
+
     //descriptor_set
     //stages
     //pc mapping, uniform mapping(just concat from stages
@@ -285,6 +440,15 @@ const VKPipeline = struct {
         device.destroyPipeline(self.vk_handle, vka);
         self.layout = .null_handle;
         self.pipeline = .null_handle;
+    }
+    fn sortRanges(self: *VKPipeline) void {
+        if (self.push_constant_range_count < 2) return;
+        for (0..self.push_constant_range_count - 1) |i| {
+            for (i + 1..self.push_constant_range_count) |j| {
+                if (self.push_constant_ranges[i].size < self.push_constant_ranges[j].size)
+                    std.mem.swap(vk.PushConstantRange, &self.push_constant_ranges[i], &self.push_constant_ranges[j]);
+            }
+        }
     }
 };
 const FragmentStageInfo = struct {
@@ -329,32 +493,97 @@ const VertexStageInfo = struct {
             if (shader_module.entry_point_info.stage_info == .vertex)
                 break shader_module.entry_point_info;
         } else return null;
-        _ = ep_info;
+        if (ep_info.inputMappings().len > attribute_storage.len)
+            @panic("TODO: unlimited vertex attributes");
+
+        var stride: u32 = 0;
+        for (ep_info.inputMappings(), 0..) |im, i| {
+            attribute_storage[i] = .{
+                .location = im.location,
+                .binding = 0,
+                .format = .r32g32b32_sfloat,
+                .offset = stride,
+            };
+            stride += im.size;
+        }
         return .{
-            .attributes = &.{},
+            .attributes = attribute_storage[0..ep_info.input_count],
             .binding_description = .{
                 .binding = 0,
-                //aligment param for that in PipelineOptions
-                .stride = 0,
+                .stride = stride,
                 .input_rate = .vertex,
             },
         };
     }
-    pub fn pipelineCreationInfo(self: *const VertexStageInfo) vk.PipelineVertexInputStateCreateInfo {
-        return .{
-            .vertex_binding_description_count = 1,
-            .p_vertex_binding_descriptions = &.{self.binding_description},
-            .vertex_attribute_description_count = @intCast(self.attributes.len),
-            .p_vertex_attribute_descriptions = self.attributes.ptr,
+};
+
+const VKBuffer = struct {
+    vk_handle: vk.Buffer = .null_handle,
+    device_memory: vk.DeviceMemory = .null_handle,
+    size: u64 = 0,
+    usage: BufferUsage = undefined,
+
+    mapped: bool = false,
+    pub fn create(size: u64, usage: BufferUsage) Error!VKBuffer {
+        if (size == 0) return .{ .size = 0, .usage = usage };
+
+        const handle = device.createBuffer(&.{
+            .size = size,
+            .usage = switch (usage) {
+                .vertex => .{ .vertex_buffer_bit = true },
+                .index => .{ .index_buffer_bit = true },
+                .uniform => .{ .uniform_buffer_bit = true },
+                else => .{},
+            },
+            .sharing_mode = .exclusive,
+            // .p_queue_family_indices = &.{},
+            // .queue_family_index_count = 1,
+        }, vka) catch return Error.ResourceCreationError;
+
+        const memory_requirements = device.getBufferMemoryRequirements(handle);
+        const pd_mem_props = instance.getPhysicalDeviceMemoryProperties(pd().handle);
+        const mem_type: u32 = for (0..pd_mem_props.memory_type_count) |i| {
+            if ((memory_requirements.memory_type_bits & (@as(u32, 1) << @as(u5, @intCast(i)))) == 0) continue;
+            if (pd_mem_props.memory_types[i].property_flags.contains(.{
+                .host_visible_bit = true,
+                // .host_coherent_bit = true,
+            }))
+                break @intCast(i);
+        } else return Error.ResourceCreationError;
+        const memory_allocate_info: vk.MemoryAllocateInfo = .{
+            .allocation_size = memory_requirements.size,
+            .memory_type_index = mem_type,
         };
+        const memory = device.allocateMemory(&memory_allocate_info, vka) catch
+            return Error.ResourceCreationError;
+        device.bindBufferMemory(handle, memory, 0) catch
+            return Error.ResourceCreationError;
+        return .{
+            .vk_handle = handle,
+            .device_memory = memory,
+            .size = size,
+            .usage = usage,
+        };
+    }
+    pub fn destroy(self: *VKBuffer) void {
+        _ = self;
+    }
+    pub fn get(handle: Buffer) *VKBuffer {
+        return &buffer_list.items[@intFromEnum(handle)];
     }
 };
 
 const VKRenderTarget = struct {};
+fn getRenderingResources() Error!?std.meta.Tuple(&.{ RenderTarget, vk.CommandBuffer }) {
+    huge.dassert(current_render_target != null);
+    const rt = if (current_render_target) |render_target| render_target else return null;
+    const cmd = if (VKWindowContext.fromRenderTarget(rt)) |wc|
+        try wc.initRenderingCmd()
+    else
+        @panic("init rendering resources NOT of WINDOW rt");
 
-const VKCommandBuffer = struct {
-    handles: [queue_type_count]vk.CommandBuffer = @splat(.null_handle),
-};
+    return .{ rt, cmd };
+}
 
 const VKWindowContext = struct {
     const mic = 3; //max_image_count
@@ -463,6 +692,20 @@ const VKWindowContext = struct {
         device.cmdEndRendering(cmd);
         self.present(cmd) catch
             return Error.PresentationError;
+    }
+    pub fn forceEndRendering(self: *VKWindowContext) void {
+        defer self.acquired_image_index = u32m;
+
+        const cmd = self.getRenderingCmdOpt(.graphics);
+        if (cmd == .null_handle) return;
+        device.cmdEndRendering(cmd);
+        device.endCommandBuffer(cmd) catch {};
+        device.queueSubmit(queue(.presentation), 1, &.{.{
+            .command_buffer_count = 0,
+            .p_wait_dst_stage_mask = &.{.{ .color_attachment_output_bit = true }},
+            .wait_semaphore_count = 1,
+            .p_wait_semaphores = &.{self.acquire_semaphores[self.fif_index]},
+        }}, self.fences[self.fif_index]) catch {};
     }
     fn getRenderingCmd(self: *VKWindowContext, queue_type: QueueType) Error!vk.CommandBuffer {
         const ptr = &self.rendering_cmds[@intFromEnum(queue_type) + self.fif_index * queue_type_count];
@@ -587,7 +830,8 @@ const VKWindowContext = struct {
                 if (pm == vk.PresentModeKHR.mailbox_khr) break pm;
             } else vk.PresentModeKHR.fifo_khr;
         };
-        result.image_count = if (result.present_mode == .mailbox_khr) 3 else 2;
+
+        result.image_count = @max(capabilities.min_image_count, @as(u32, if (result.present_mode == .mailbox_khr) 3 else 2));
         const exclusive = pd().queueFamilyIndex(.graphics) == pd().queueFamilyIndex(.presentation);
         result.swapchain = try device.createSwapchainKHR(&.{
             .surface = result.surface,
@@ -734,7 +978,10 @@ pub fn initBackend() VKError!gpu.Backend {
     api_version = if (physical_device_api_version.@">="(instance_api_version)) instance_api_version else physical_device_api_version;
     try initLogicalDeviceAndQueues(device_extension_list.items);
 
-    shader_compiler = .new(null, null, .{ .target_env = .vulkan1_4 });
+    shader_compiler = .new(null, null, .{
+        .target_env = .vulkan1_4,
+        .max_push_constant_buffer_size = max_push_constant_bytes,
+    });
     return versionBackend(api_version);
 }
 
@@ -1101,6 +1348,12 @@ pub const minimal_required_queue_family_config: QueueConfiguration = .{
 pub const QueueType = enum(u8) { graphics, presentation, compute, transfer, sparse_binding, protected, video_decode, video_encode };
 
 //=======================
+fn getStageFlags(stage_info: hgsl.StageInfo) vk.ShaderStageFlags {
+    return .{
+        .vertex_bit = stage_info == .vertex,
+        .fragment_bit = stage_info == .fragment,
+    };
+}
 fn castPrimitiveTopology(primitive: gpu.PrimitiveTopology) vk.PrimitiveTopology {
     return switch (primitive) {
         .triangle => .triangle_list,
@@ -1130,6 +1383,8 @@ const Error = gpu.Error;
 const Pipeline = gpu.Pipeline;
 const ShaderModule = gpu.ShaderModule;
 const RenderTarget = gpu.RenderTarget;
+const Buffer = gpu.Buffer;
+const BufferUsage = gpu.BufferUsage;
 const WindowContext = gpu.WindowContext;
 const ClearValue = gpu.ClearValue;
 const Version = huge.Version;
@@ -1156,14 +1411,25 @@ fn versionBackend(version: Version) gpu.Backend {
         .deinit = &deinit,
 
         .draw = &draw,
+        .bindVertexBuffer = &bindVertexBuffer,
+        .bindIndexBuffer = &bindIndexBuffer,
         .beginRendering = &beginRendering,
         .endRendering = &endRendering,
 
+        .pipelinePushConstant = pipelinePushConstant,
         .createPipeline = &createPipeline,
         .createShaderModulePath = &createShaderModulePath,
         .destroyShaderModule = &destroyShaderModule,
 
+        .loadBuffer = &loadBuffer,
+        .mapBuffer = &mapBuffer,
+        .unmapBuffer = &unmapBuffer,
+        .createBuffer = &createBuffer,
+        .destroyBuffer = &destroyBuffer,
+
         .renderTargetSize = &renderTargetSize,
+
+        .updateWindowContext = &updateWindowContext,
         .getWindowRenderTarget = &getWindowRenderTarget,
         .createWindowContext = &createWindowContext,
         .destroyWindowContext = &destroyWindowContext,
