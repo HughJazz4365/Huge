@@ -1,19 +1,29 @@
 const vert = entrypoint(.vertex){
 	push vp, model : mat4
-	in pos, normal,
-	out(.flat) out_normal : vec3 = ,,normal
+	in pos, normal: vec3
+	out(.flat) out_normal, out out_pos = normal, pos
 
 	@position = vp * model * vec4{pos, 1} 
-	//@position = vec4{pos, 1} 
-
 }
 
 const frag = entrypoint(.fragment){
-	in(.flat) normal: vec3
+	in(.flat) normal, in world_pos: vec3
+	const albedo : vec3 = .{0.9, 0.1, 0.9}
 
+	//ubo start
 	const light_dir  = |vec3{3, -9, -1}
-	const diffuse = normal *** -light_dir
+	const ambient = 0.1
+	const spec_pow = 30
+	const spec_intensity = 1
 
-	out o : vec4 = .{vec3{diffuse}, 1}
+	const eye_pos: vec3 = .{0}
+	//ubo end
+
+	const diffuse = -light_dir *** normal
+
+	const view_dir = |(eye_pos - world_pos)
+	const specular = (|@reflect(-light_dir, normal) *** view_dir) ^ spec_pow * spec_intensity * diffuse
+
+	out o: vec4 = .{albedo * .{diffuse + ambient + specular}, 1}
 }
 

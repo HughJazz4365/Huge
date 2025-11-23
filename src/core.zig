@@ -4,7 +4,7 @@ const math = huge.math;
 const util = huge.util;
 
 pub const Camera = struct {
-    fov: f32 = 80 * math.d2r,
+    fov: f32 = 60 * math.d2r,
     aspect_ratio: f32 = undefined,
     near: f32 = 0.1,
     far: f32 = 300,

@@ -1,3 +1,12 @@
+// + resource deallocation
+// (handles, shader results, replace arena in ShaderCompiler)
+// + vertex attribute formats??(from shader compiler)
+// + shader hot reloading
+// + Textures, opaque uniforms
+// + obj, png loading
+// + shader linkage checking
+// + camera movement(mouse input)
+
 const std = @import("std");
 const huge = @import("huge");
 const math = huge.math;
@@ -9,7 +18,6 @@ pub fn main() !void {
     try huge.init();
     defer huge.deinit();
     var window: huge.Window = try .create(.{ .title = "sample#0", .size = huge.Window.HD });
-    defer window.destroy();
 
     const pipeline = try gpu.Pipeline.createPath(.{ .surface = .{
         .vertex = .{ .path = "shader.hgsl", .entry_point = "vert" },
@@ -27,7 +35,7 @@ pub fn main() !void {
     const mesh: huge.rend.MeshRenderer = try .new(@ptrCast(&cube.vertices), u16, &cube.indices);
     var cube_transform: huge.Transform = .{
         .position = .{ 1, 0, 0 },
-        .rotation = math.quatFromEulerDeg(.{ 0, 45, 0 }),
+        .scale = .{ 2.5, 1, 2 },
     };
 
     var avg: f64 = 0;
@@ -39,6 +47,7 @@ pub fn main() !void {
         }
 
         const speed = 5;
+        cube_transform.rotation = math.quatFromEuler(.{ 0, huge.time.seconds(), 0 });
         camera_transform.position += math.scale(window.warsudVector(), huge.time.delta() * speed);
 
         try gpu.beginRendering(window.renderTarget(), .{ .color = @splat(0.14) });
