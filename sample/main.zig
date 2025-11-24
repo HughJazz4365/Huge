@@ -3,10 +3,19 @@
 // not critical tho??
 // non matching location types should def be an error
 
-// + Textures, opaque uniforms
+// + descriptor sets, opaque uniforms
 // + obj, png loading
 // + shader linkage checking
 // + camera movement(mouse input)
+
+// + vulkanBadkend.createTexture => createTextures(plural)
+// so that there can be one allocation for multiple textures
+// maybe even make plural versions of other create funcitons
+
+// + renderTargetSize -> uvec2??
+// + remove texture.renderTarget
+// some object that holds color, depth/stencil attachments
+// like opengl framebuffer
 
 const std = @import("std");
 const huge = @import("huge");
@@ -40,9 +49,11 @@ pub fn main() !void {
         .position = .{ 1, 0, 0 },
         .scale = .{ 2.5, 1, 2 },
     };
-    const texture: gpu.Texture = try .create(.{ 2, 2, 0 }, .rgba8_norm, .{});
-    std.debug.print("th: {}\n", .{texture});
-    const rt = try texture.renderTarget();
+    // const texture: gpu.Texture = try .create(.{ 2, 2, 0 }, .rgba8_norm, .{});
+    // std.debug.print("th: {}\n", .{texture});
+    // const rt = try texture.renderTarget();
+    const rt = try gpu.RenderTarget.create(.{ 2, 2 }, .rgba8_norm, .depth16, .{});
+
     std.debug.print("t_rt: {}, size: {d}, wrt: {d}\n", .{
         rt,
         rt.size(),
