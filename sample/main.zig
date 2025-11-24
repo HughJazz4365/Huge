@@ -1,7 +1,8 @@
-// + resource deallocation
-// (handles, shader results, replace arena in ShaderCompiler)
 // + vertex attribute formats??(from shader compiler)
-// + shader hot reloading
+// extra locations that dont have match are a validation error
+// not critical tho??
+// non matching location types should def be an error
+
 // + Textures, opaque uniforms
 // + obj, png loading
 // + shader linkage checking
@@ -17,7 +18,9 @@ const cube = @import("cube.zig");
 pub fn main() !void {
     try huge.init();
     defer huge.deinit();
-    var window: huge.Window = try .create(.{ .title = "sample#0", .size = huge.Window.HD });
+    huge.Time.avg_threshold = 5 * std.time.ns_per_s;
+
+    var window: huge.Window = try .create(.{ .title = "sample#0", .size = .{ 800, 600 } });
 
     const pipeline = try gpu.Pipeline.createPath(.{ .surface = .{
         .vertex = .{ .path = "shader.hgsl", .entry_point = "vert" },
@@ -37,10 +40,18 @@ pub fn main() !void {
         .position = .{ 1, 0, 0 },
         .scale = .{ 2.5, 1, 2 },
     };
+    const texture: gpu.Texture = try .create(.{ 2, 2, 0 }, .rgba8_norm, .{});
+    std.debug.print("th: {}\n", .{texture});
+    const rt = try texture.renderTarget();
+    std.debug.print("t_rt: {}, size: {d}, wrt: {d}\n", .{
+        rt,
+        rt.size(),
+        window.renderTarget().size(),
+    });
 
     var avg: f64 = 0;
-    huge.Time.avg_threshold = 10 * std.time.ns_per_s;
     while (window.tick()) {
+        if (window.frame_count % 100 == 0) try gpu.reloadPipelines();
         if (huge.time.avg64() != avg) {
             avg = huge.time.avg64();
             std.debug.print("AVGFPS: {d}\n", .{1.0 / avg});

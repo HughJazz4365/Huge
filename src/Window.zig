@@ -5,6 +5,7 @@ const math = huge.math;
 const util = huge.util;
 const Window = @This();
 
+const destroyed_window: glfw.Window = 0;
 pub const Handle = *glfw.Window;
 
 handle: Handle = undefined,
@@ -13,6 +14,8 @@ title: [:0]const u8,
 context: huge.gpu.WindowContext = undefined,
 current_input_mask: [input_mask_len]usize = @splat(0),
 last_input_mask: [input_mask_len]usize = @splat(0),
+
+frame_count: u64 = 0,
 const input_mask_len = (512 / 8) / @sizeOf(usize);
 
 pub const FullHD: Size = .{ 1920, 1080 };
@@ -23,6 +26,7 @@ pub const HD: Size = .{ 1280, 720 };
 pub fn tick(self: *Window) bool {
     const should = self.shouldClose();
     if (should) return false;
+    self.frame_count += 1;
     pollEvents();
     huge.time.tick();
     self.querryInput();
@@ -112,9 +116,11 @@ pub fn create(attributes: Attributes) Error!Window {
     return window;
 }
 
-pub fn destroy(self: Window) void {
+pub fn destroy(self: *Window) void {
     huge.gpu.destroyWindowContext(self.context);
-    glfw.destroyWindow(self.handle);
+    if (@intFromPtr(self.handle) != @intFromPtr(&destroyed_window))
+        glfw.destroyWindow(self.handle);
+    self.handle = @constCast(&destroyed_window);
 }
 pub fn setAttributes(self: Window, attributes: Attributes) void {
     inline for (@typeInfo(Attributes).@"struct".fields, 0..) |sf, i| {

@@ -8,11 +8,11 @@ const vert = entrypoint(.vertex){
 
 const frag = entrypoint(.fragment){
 	in(.flat) normal, in world_pos: vec3
-	const albedo : vec3 = .{0.9, 0.1, 0.9}
+	const albedo : vec3 = .{1, 0.1, 1}
 
 	//ubo start
 	const light_dir  = |vec3{3, -9, -1}
-	const ambient = 0.1
+	const ambient = 0.15
 	const spec_pow = 30
 	const spec_intensity = 1
 

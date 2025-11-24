@@ -22,6 +22,9 @@ pub fn structFieldIndexFromName(Struct: type, comptime name: []const u8) usize {
         if (strEql(name, sf.name)) break i;
     } else unreachable;
 }
+pub fn enumLen(Enum: type) usize {
+    return @typeInfo(Enum).@"enum".fields.len;
+}
 pub fn StructFromEnum(Enum: type, T: type, default_value: ?T, layout: std.builtin.Type.ContainerLayout) type {
     const em = @typeInfo(Enum).@"enum";
     var struct_fields: [em.fields.len]std.builtin.Type.StructField = undefined;

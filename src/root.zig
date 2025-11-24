@@ -1,5 +1,5 @@
 const std = @import("std");
-const zigbuiltin = @import("builtin");
+pub const zigbuiltin = @import("builtin");
 pub const core = @import("core.zig");
 pub const Window = @import("Window.zig");
 pub const math = @import("math.zig");

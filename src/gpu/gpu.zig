@@ -1,5 +1,6 @@
 const std = @import("std");
 const huge = @import("../root.zig");
+const util = huge.util;
 const math = huge.math;
 pub const hgsl = @import("hgsl");
 pub const Backend = @import("GpuBackend.zig");
@@ -34,6 +35,10 @@ pub fn createWindowContext(window: huge.Window) Error!WindowContext {
 }
 pub fn destroyWindowContext(window_context: WindowContext) void {
     backend.destroyWindowContext(window_context);
+}
+pub fn reloadPipelines() Error!void {
+    if (huge.zigbuiltin.mode == .Debug)
+        try backend.reloadPipelines();
 }
 pub inline fn coordinateSystem() math.CoordinateSystem {
     return backend.coordinate_system;
@@ -99,7 +104,7 @@ pub const Pipeline = enum(u32) {
             else => try backend.pipelinePushConstant(self, name, 0, 0, ptr),
         }
     }
-    pub fn createPath(pipeline_source: PipelineSourcePath, opt: PipelineOptions) Error!Pipeline {
+    pub fn createPath(pipeline_source: PipelineSourcePath, params: PipelineParams) Error!Pipeline {
         var shader_modules: [max_pipeline_stages]ShaderModule = undefined;
         var index: usize = 0;
         while (pipeline_source.next(index)) |ps| {
@@ -108,10 +113,10 @@ pub const Pipeline = enum(u32) {
                 try backend.createShaderModulePath(ps.path, ps.entry_point);
             index += 1;
         }
-        return try backend.createPipeline(shader_modules[0..index], opt);
+        return try backend.createPipeline(shader_modules[0..index], params);
     }
 };
-pub const PipelineOptions = struct {
+pub const PipelineParams = struct {
     //vertex
     winding_order: WindingOrder = .clockwise,
     cull: Cull = .none,
@@ -193,7 +198,7 @@ pub const FeatureSet = huge.util.StructFromEnum(Feature, bool, false, .@"packed"
 //handle types
 pub const RenderTarget = enum(Handle) {
     _,
-    pub fn size(self: RenderTarget) math.uvec2 {
+    pub fn size(self: RenderTarget) math.uvec3 {
         return backend.renderTargetSize(self);
     }
 };
@@ -223,7 +228,87 @@ pub const Buffer = enum(Handle) {
 };
 pub const IndexType = enum { u32, u16, u8 };
 pub const BufferUsage = enum { uniform, vertex, index, storage };
-pub const Texture = enum(Handle) { _ };
+pub const Texture = enum(Handle) {
+    _,
+    pub fn renderTarget(self: Texture) Error!RenderTarget {
+        return try backend.getTextureRenderTarget(self);
+    }
+    pub fn create(size: math.uvec3, format: Format, params: TextureParams) Error!Texture {
+        return try backend.createTexture(size, format, params);
+    }
+    pub fn destroy(self: Texture) void {
+        backend.destroyTexture(self);
+    }
+};
+pub const TextureParams = struct {
+    filtering: SampleFiltering = null,
+    mip_levels: u32 = 1,
+    array_layers: u32 = 1,
+    cubemap: bool = false,
+
+    render_target_hint: bool = false,
+    // samples: u8,
+    //usage hints
+};
+pub const SampleFiltering = ?struct {
+    shrink: Filtering = .point,
+    expand: Filtering = .point,
+};
+pub const Filtering = enum { point, linear };
+pub const Format = enum {
+    r8,
+    r8_norm,
+    rgba8,
+    rgba8_norm,
+    rgba4,
+
+    r11_g11_b10,
+    rgb10_a2,
+    rgb5_a1,
+
+    r32,
+    rg32,
+    rgb32,
+    rgba32,
+
+    //depth
+    depth32,
+    depth16,
+    stencil8,
+    depth16_stencil8,
+    depth24_stencil8,
+    depth32_stencil8,
+
+    //compressed
+    // bc1_rgb_unorm_block = 131,
+    // bc1_rgb_srgb_block = 132,
+    // bc1_rgba_unorm_block = 133,
+    // bc1_rgba_srgb_block = 134,
+    // bc2_unorm_block = 135,
+    // bc2_srgb_block = 136,
+    // bc3_unorm_block = 137,
+    // bc3_srgb_block = 138,
+    // bc4_unorm_block = 139,
+    // bc4_snorm_block = 140,
+    // bc5_unorm_block = 141,
+    // bc5_snorm_block = 142,
+    // bc6h_ufloat_block = 143,
+    // bc6h_sfloat_block = 144,
+    // bc7_unorm_block = 145,
+    // bc7_srgb_block = 146,
+    pub fn isDepthStencil(self: Format) bool {
+        return switch (self) {
+            .depth32,
+            .depth16,
+            .stencil8,
+            .depth16_stencil8,
+            .depth24_stencil8,
+            .depth32_stencil8,
+            => true,
+            else => false,
+        };
+    }
+};
 
 pub const ShaderModule = enum(Handle) { _ };
 pub const ShaderStage = hgsl.Parser.ShaderStage;
@@ -253,6 +338,7 @@ pub const Error = error{
     ShaderEntryPointNotFound,
     ShaderPushConstantOutOfBounds,
 
+    InvalidImageType,
     BufferMisuse,
     MemoryRemap,
 
