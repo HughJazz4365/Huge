@@ -198,8 +198,38 @@ pub const FeatureSet = huge.util.StructFromEnum(Feature, bool, false, .@"packed"
 //handle types
 pub const RenderTarget = enum(Handle) {
     _,
-    pub fn size(self: RenderTarget) math.uvec3 {
+    pub fn size(self: RenderTarget) math.uvec2 {
         return backend.renderTargetSize(self);
+    }
+    // pub fn colorAttachment(self: RenderTarget) ?Texture
+    // pub fn depthStencilAttachment(self: RenderTarget) ?Texture
+    pub fn fromTextures(color: ?Texture, depth_stencil: ?Texture) Error!RenderTarget {
+        if (color != null and depth_stencil != null) {
+            const c, const ds = .{ color.?, depth_stencil.? };
+            if (c.format().isDepthStencil()) return Error.WrongFormat;
+            if (!ds.format().isDepthStencil()) return Error.WrongFormat;
+            if (c.texType() != .@"2d") return Error.WrongTextureType;
+            if (ds.texType() != .@"2d") return Error.WrongTextureType;
+            if (@reduce(.Or, c.size() != ds.size())) return Error.NonMatchingRenderTargetAttachmentSizes;
+        } else if (color) |c| {
+            if (c.format().isDepthStencil()) return Error.WrongFormat;
+            if (c.texType() != .@"2d") return Error.WrongTextureType;
+        } else if (depth_stencil) |ds| {
+            if (!ds.format().isDepthStencil()) return Error.WrongFormat;
+            if (ds.texType() != .@"2d") return Error.WrongTextureType;
+        }
+
+        return try backend.createRenderTargetFromTextures(color, depth_stencil);
+    }
+    pub fn create(tex_size: math.uvec2, color_format: ?Format, depth_stencil_format: ?Format, params: TextureParams) Error!RenderTarget {
+        if (color_format != null and color_format.?.isDepthStencil())
+            return Error.WrongFormat;
+        if (depth_stencil_format != null and !depth_stencil_format.?.isDepthStencil())
+            return Error.WrongFormat;
+        return try backend.createRenderTarget(tex_size, color_format, depth_stencil_format, params);
+    }
+    pub fn destroy(self: RenderTarget) void {
+        backend.destroyRenderTarget(self);
     }
 };
 
@@ -230,25 +260,43 @@ pub const IndexType = enum { u32, u16, u8 };
 pub const BufferUsage = enum { uniform, vertex, index, storage };
 pub const Texture = enum(Handle) {
     _,
-    pub fn renderTarget(self: Texture) Error!RenderTarget {
-        return try backend.getTextureRenderTarget(self);
+    pub fn texType(self: Texture) TextureType {
+        return backend.getTextureType(self);
     }
-    pub fn create(size: math.uvec3, format: Format, params: TextureParams) Error!Texture {
-        return try backend.createTexture(size, format, params);
+    pub fn size(self: Texture) math.uvec3 {
+        return backend.getTextureSize(self);
+    }
+    pub fn format(self: Texture) Format {
+        return backend.getTextureFormat(self);
+    }
+    pub fn renderTarget(self: Texture) Error!RenderTarget {
+        return try backend.createRenderTargetFromTextures(
+            if (self.format().isDepthStencil()) null else self,
+            if (!self.format().isDepthStencil()) null else self,
+        );
+    }
+    pub fn create(tex_size: math.uvec3, tex_format: Format, params: TextureParams) Error!Texture {
+        return try backend.createTexture(tex_size, tex_format, params);
     }
     pub fn destroy(self: Texture) void {
         backend.destroyTexture(self);
     }
+};
+pub const TextureType = enum {
+    @"1d",
+    @"2d",
+    @"3d",
+    cube,
+    @"1d_array",
+    @"2d_array",
+    cube_array,
 };
 pub const TextureParams = struct {
     filtering: SampleFiltering = null,
     mip_levels: u32 = 1,
     array_layers: u32 = 1,
     cubemap: bool = false,
-
-    render_target_hint: bool = false,
     // samples: u8,
-    //usage hints
 };
 pub const SampleFiltering = ?struct {
     shrink: Filtering = .point,
@@ -338,6 +386,10 @@ pub const Error = error{
     ShaderEntryPointNotFound,
     ShaderPushConstantOutOfBounds,
 
+    NonMatchingRenderTargetAttachmentSizes,
+    NonMatchingRenderAttachmentParams,
+    WrongFormat,
+    WrongTextureType,
     InvalidImageType,
     BufferMisuse,
     MemoryRemap,

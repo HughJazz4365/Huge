@@ -67,16 +67,30 @@ var shader_module_list: List(VKShaderModule) = .empty;
 var pipeline_list: List(VKPipeline) = .empty;
 var buffer_list: List(VKBuffer) = .empty;
 var texture_list: List(VKTexture) = .empty;
+var memory_allocation_list: List(MemoryAllocation) = .empty;
+var render_target_list: List(VKRenderTarget) = .empty;
 
 var window_context_primary: VKWindowContext = .{};
 var window_context_list: List(VKWindowContext) = .empty;
 var window_context_count: u32 = 0;
 
-var current_render_target: ?RenderTarget = null;
+const null_render_target: RenderTarget = @enumFromInt(~@as(gpu.Handle, 0));
+var current_render_target: RenderTarget = null_render_target;
+const MemoryAllocation = struct {
+    memory: vk.DeviceMemory = .null_handle,
+    ref_count: gpu.Handle = 0,
+    pub fn free(self: *MemoryAllocation) void {
+        if (self.memory != .null_handle)
+            device.freeMemory(self.memory, vka);
+        self.memory = .null_handle;
+    }
+};
 //======|methods|========
 
 fn draw(handle: Pipeline, params: gpu.DrawParams) Error!void {
-    _, const cmd = if (try getRenderingResources()) |r| r else return;
+    const cmd = try getRenderingResources();
+    if (cmd == .null_handle) return;
+
     errdefer forceEndRendering();
 
     device.cmdBindPipeline(cmd, .graphics, VKPipeline.get(handle).vk_handle);
@@ -98,7 +112,8 @@ fn draw(handle: Pipeline, params: gpu.DrawParams) Error!void {
     );
 }
 fn bindIndexBuffer(handle: Buffer, index_type: gpu.IndexType) Error!void {
-    _, const cmd = if (try getRenderingResources()) |r| r else return;
+    const cmd = try getRenderingResources();
+    if (cmd == .null_handle) return;
     errdefer forceEndRendering();
 
     const buffer: *VKBuffer = .get(handle);
@@ -113,7 +128,8 @@ fn bindIndexBuffer(handle: Buffer, index_type: gpu.IndexType) Error!void {
     });
 }
 fn bindVertexBuffer(handle: Buffer) Error!void {
-    _, const cmd = if (try getRenderingResources()) |r| r else return;
+    const cmd = try getRenderingResources();
+    if (cmd == .null_handle) return;
     errdefer forceEndRendering();
 
     const buffer: *VKBuffer = .get(handle);
@@ -122,7 +138,7 @@ fn bindVertexBuffer(handle: Buffer) Error!void {
     device.cmdBindVertexBuffers(cmd, 0, 1, &.{buffer.vk_handle}, &.{0});
 }
 fn beginRendering(render_target: RenderTarget, clear_value: ClearValue) Error!void {
-    if (current_render_target) |_| try endRendering();
+    try endRendering();
 
     current_render_target = render_target;
     if (VKWindowContext.fromRenderTarget(render_target)) |wc| {
@@ -130,19 +146,19 @@ fn beginRendering(render_target: RenderTarget, clear_value: ClearValue) Error!vo
     } else @panic("begin rendering NOT to WINDOW");
 }
 fn endRendering() Error!void {
-    const rt = if (current_render_target) |render_target| render_target else return;
-    defer current_render_target = null;
+    if (current_render_target == null_render_target) return;
+    defer current_render_target = null_render_target;
 
-    if (VKWindowContext.fromRenderTarget(rt)) |wc| {
+    if (VKWindowContext.fromRenderTarget(current_render_target)) |wc| {
         try wc.endRendering();
     } else @panic("end rendering NOT to WINDOW");
 }
 
 fn forceEndRendering() void {
-    const rt = if (current_render_target) |render_target| render_target else return;
-    defer current_render_target = null;
+    if (current_render_target == null_render_target) return;
+    defer current_render_target = null_render_target;
 
-    if (VKWindowContext.fromRenderTarget(rt)) |wc| {
+    if (VKWindowContext.fromRenderTarget(current_render_target)) |wc| {
         wc.forceEndRendering();
     } else @panic("end rendering URGENT NOT to WINDOW");
 }
@@ -168,7 +184,9 @@ fn pipelinePushConstant(
     ptr: *const anyopaque,
 ) Error!void {
     _ = .{ local_offset, local_size };
-    _, const cmd = if (try getRenderingResources()) |r| r else return;
+    const cmd = try getRenderingResources();
+    if (cmd == .null_handle) return;
+
     const pipeline: *VKPipeline = .get(handle);
 
     var offsets: [Pipeline.max_pipeline_stages]u32 = undefined;
@@ -215,8 +233,7 @@ fn createShaderModulePath(path: []const u8, entry_point: []const u8) Error!Shade
     return handle;
 }
 fn destroyShaderModule(handle: ShaderModule) void {
-    const shader_module: *VKShaderModule = .get(handle);
-    shader_module.destroy();
+    VKShaderModule.get(handle).destroy();
 }
 fn loadBuffer(handle: Buffer, bytes: []const u8, offset: usize) Error!void {
     const mapped = try mapBuffer(handle, bytes.len, offset);
@@ -228,7 +245,7 @@ fn mapBuffer(handle: Buffer, bytes: usize, offset: usize) Error![]u8 {
     if (buffer.mapped) return Error.MemoryRemap;
 
     if (bytes > buffer.size) return Error.OutOfMemory;
-    const ptr = (device.mapMemory(buffer.device_memory, offset, @intCast(bytes), .{}) catch
+    const ptr = (device.mapMemory(accessMemory(buffer.device_memory), offset, @intCast(bytes), .{}) catch
         return Error.OutOfMemory) orelse
         return Error.OutOfMemory;
     buffer.mapped = true;
@@ -238,18 +255,80 @@ fn unmapBuffer(handle: Buffer) void {
     const buffer: *VKBuffer = .get(handle);
     if (!buffer.mapped) return;
 
-    device.unmapMemory(buffer.device_memory);
+    device.unmapMemory(accessMemory(buffer.device_memory));
     buffer.mapped = false;
 }
+fn createRenderTargetFromTextures(color: ?Texture, depth_stencil: ?Texture) Error!RenderTarget {
+    var rt: VKRenderTarget = .{};
+    if (color) |c| {
+        rt.mask.color = true;
+        rt.color_attachment = c;
+    }
+    if (depth_stencil) |d| {
+        rt.mask.depth_stencil = true;
+        rt.depth_stencil_attachment = d;
+    }
+    if (!rt.mask.color and !rt.mask.depth_stencil) return null_render_target;
+    if (!rt.mask.color or !rt.mask.depth_stencil) {
+        const t: *VKTexture = .get(if (color) |c| c else depth_stencil.?);
+        _ = try VKTexture.recreateIfNeeded(@ptrCast(t), &.{t.capabilities.add(.{ .attachment = true })});
+        return try rt.append();
+    }
+
+    const ct, const dst = .{ VKTexture.get(color.?), VKTexture.get(depth_stencil.?) };
+
+    // if (!std.meta.eql(ct.params, dst.params))
+    //     return Error.NonMatchingRenderAttachmentParams;
+    var arr: [2]VKTexture = .{ ct.*, dst.* };
+    const target_capabilites = ct.capabilities.add(dst.capabilities).add(.{ .attachment = true });
+    if (try VKTexture.recreateIfNeeded(&arr, &.{target_capabilites})) {
+        ct.* = arr[0];
+        dst.* = arr[1];
+    }
+    return try rt.append();
+}
+// renderTargetFromTextures: *const RendrerTargetFromTexturesFn = undefined,
+fn createRenderTarget(
+    size: math.uvec2,
+    color_format: ?gpu.Format,
+    depth_stencil_format: ?gpu.Format,
+    params: gpu.TextureParams,
+) Error!RenderTarget {
+    if (color_format == null and depth_stencil_format == null) return null_render_target;
+    const render_target = try VKRenderTarget.create(size, color_format, depth_stencil_format, params);
+    return try render_target.append();
+}
+fn destroyRenderTarget(handle: RenderTarget) void {
+    VKRenderTarget.get(handle).destroy();
+}
+
+// createRenderTarget: *const CreateRenderTargetFn = undefined,
+// destroyRenderTarget: *const DestroyRenderTargetFn = undefined,
+
+fn getTextureType(handle: Texture) gpu.TextureType {
+    const t = VKTexture.get(handle);
+
+    if (t.size[2] > 1) return .@"3d";
+    if (t.size[1] <= 1) return if (t.params.array_layers > 1) .@"1d_array" else .@"1d";
+
+    return if (t.params.cubemap) ( //
+        return if (t.params.array_layers > 1) .cube_array else .cube //
+    ) else ( //
+        return if (t.params.array_layers > 1) .@"2d_array" else .@"2d" //
+    );
+}
+fn getTextureSize(handle: Texture) math.uvec3 {
+    return VKTexture.get(handle).size;
+}
+fn getTextureFormat(handle: Texture) Format {
+    return VKTexture.get(handle).format;
+}
 fn createTexture(size: math.uvec3, format: Format, params: gpu.TextureParams) Error!Texture {
-    const texture: VKTexture = try .create(size, format, params, false, false);
-    const handle: Texture = @enumFromInt(@as(gpu.Handle, @intCast(texture_list.items.len)));
-    try texture_list.append(arena.allocator(), texture);
-    return handle;
+    const texture: VKTexture = try .create(size, format, params, .{});
+    return try texture.append();
 }
 fn destroyTexture(handle: Texture) void {
-    const texture: *VKTexture = .get(handle);
-    texture.destroy();
+    VKTexture.get(handle).destroy();
 }
 fn createBuffer(size: usize, usage: BufferUsage) Error!Buffer {
     const buffer = try VKBuffer.create(@intCast(size), usage);
@@ -258,15 +337,17 @@ fn createBuffer(size: usize, usage: BufferUsage) Error!Buffer {
     return handle;
 }
 fn destroyBuffer(handle: Buffer) void {
-    const buffer: *VKBuffer = .get(handle);
-    buffer.destroy();
+    VKBuffer.get(handle).destroy();
 }
 
-fn renderTargetSize(render_target: RenderTarget) math.uvec3 {
+fn renderTargetSize(render_target: RenderTarget) math.uvec2 {
+    if (render_target == null_render_target) return @splat(0);
+
     return if (VKWindowContext.fromRenderTarget(render_target)) |wc|
-        .{ wc.extent.width, wc.extent.height, 1 }
+        .{ wc.extent.width, wc.extent.height }
     else
-        VKTexture.fromRenderTarget(render_target).size;
+        VKRenderTarget.get(render_target).size();
+    // math.swizzle(VKTexture.fromRenderTarget(render_target).size, .xy);
 }
 
 fn updateWindowContext(handle: WindowContext) void {
@@ -278,12 +359,6 @@ fn getWindowRenderTarget(window: huge.Window) RenderTarget {
 }
 fn getWindowContextRenderTarget(handle: WindowContext) RenderTarget {
     return @enumFromInt((1 << 31) | @intFromEnum(handle));
-}
-fn getTextureRenderTarget(handle: Texture) Error!RenderTarget {
-    const texture: *VKTexture = .get(handle);
-    try texture.recreateIfNeeded(true, texture.blit, texture.transfer);
-
-    return @enumFromInt(~@as(gpu.Handle, 1 << 31) & @intFromEnum(handle));
 }
 fn createWindowContext(window: huge.Window) Error!WindowContext {
     const wc = VKWindowContext.create(window) catch
@@ -594,146 +669,221 @@ const VKTexture = struct {
     image: vk.Image = .null_handle,
     view: vk.ImageView = .null_handle,
     sampler: vk.Sampler = .null_handle,
-    memory: vk.DeviceMemory = .null_handle,
+    memory: u32 = u32m,
 
     size: math.uvec3 = @splat(1),
     format: Format = .rgba8_norm,
     params: gpu.TextureParams = .{},
-    blit: bool = false,
-    transfer: bool = false,
 
+    capabilities: Capabilites = .{},
     vk_format: vk.Format = .undefined,
 
-    const UseContext = struct {};
+    const max_textures_per_allocation = 16;
+    const mt = max_textures_per_allocation;
 
     pub fn recreateIfNeeded(
-        self: *VKTexture,
-        render_target: bool,
-        blit: bool,
-        transfer: bool,
-    ) Error!void {
-        const valid = (!render_target or self.params.render_target_hint) and
-            (!blit or self.blit) and
-            (!transfer or self.transfer);
-        if (!valid) {
-            var params = self.params;
-            params.render_target_hint = render_target or self.params.render_target_hint;
-            self.destroyHandles();
-            self.* = try create(
-                self.size,
-                self.format,
-                params,
-                blit or self.blit,
-                transfer or self.transfer,
+        textures: []VKTexture,
+        capabilities: []const Capabilites,
+    ) Error!bool {
+        if (textures.len == 0) return false;
+        var recreated = false;
+        if (textures.len > mt)
+            recreated = try recreateIfNeeded(
+                textures[mt..],
+                if (capabilities.len > 0) capabilities[@min(mt, capabilities.len - 1)..] else &.{},
             );
-        }
-    }
 
+        var capability_storage: [mt]Capabilites = @splat(.{});
+        if (capabilities.len > 0) for (0..mt) |i| {
+            capability_storage[i] = capabilities[@min(i, capabilities.len - 1)];
+        };
+
+        const tex = textures[0..@min(textures.len, mt)];
+
+        if (for (tex, 0..) |t, i| {
+            if (!capability_storage[i].isSubset(t.capabilities)) break true;
+        } else false) {
+            var params_storage: [mt]TextureCreateParams = undefined;
+            for (tex, 0..) |*t, i| {
+                t.destroyHandles();
+                params_storage[i] = .{
+                    .size = t.size,
+                    .format = t.format,
+                    .capabilities = capability_storage[i],
+                };
+            }
+            try createSlice(tex, params_storage[0..tex.len]);
+            return true;
+        }
+        return recreated;
+    }
     pub fn create(
         size: math.uvec3,
         format: Format,
         params: gpu.TextureParams,
-        blit: bool,
-        transfer: bool,
+        capabilities: VKTexture.Capabilites,
     ) Error!VKTexture {
-        const new_size = @max(size, @as(math.uvec3, @splat(1)));
-        var result: VKTexture = .{
+        var t: VKTexture = undefined;
+        try createSlice(@ptrCast(&t), &.{.{
+            .size = size,
             .format = format,
-            .size = new_size,
             .params = params,
-            .blit = blit,
-            .transfer = transfer,
+            .capabilities = capabilities,
+        }});
+        return t;
+    }
+
+    pub fn createSlice(
+        output: []VKTexture,
+        params: []const TextureCreateParams,
+    ) Error!void {
+        if (output.len == 0) return;
+        if (output.len > mt)
+            try createSlice(
+                output[mt..],
+                if (params.len > 0) params[@min(mt, params.len - 1)..] else &.{},
+            );
+
+        var param_storage: [mt]TextureCreateParams = @splat(.{});
+        if (params.len > 0) for (0..mt) |i| {
+            param_storage[i] = params[@min(i, params.len - 1)];
         };
-        result.params.array_layers = @max(1, result.params.array_layers);
-        const image_type: vk.ImageType = if (result.size[1] == 1)
-            .@"1d"
-        else if (result.size[2] == 1) .@"2d" else .@"3d";
-        if ((image_type != .@"2d" and result.params.cubemap) or
-            (image_type == .@"3d" and result.params.array_layers > 1))
-            return Error.InvalidImageType;
+        const tex = output[0..@min(output.len, mt)];
+        for (tex, 0..) |*t, i| {
+            const p = param_storage[i];
+            var new_size = @max(p.size, @as(math.uvec3, @splat(1)));
+            if (new_size[1] == 1) new_size[2] = 1;
 
-        const format_usage: FormatUsage = .{
-            .sampled = result.params.filtering != null,
-            .sampled_linear = if (result.params.filtering) |f|
-                f.shrink == .linear or f.expand == .linear
-            else
-                false,
+            t.* = .{
+                .format = p.format,
+                .size = new_size,
+                .params = p.params,
+                .capabilities = p.capabilities,
+            };
+            t.params.array_layers = @max(1, t.params.array_layers);
+            const image_type: vk.ImageType = if (t.size[1] == 1)
+                .@"1d"
+            else if (t.size[2] == 1) .@"2d" else .@"3d";
+            if ((image_type != .@"2d" and t.params.cubemap) or
+                (image_type == .@"3d" and t.params.array_layers > 1))
+                return Error.InvalidImageType;
 
-            .color_attachment = !format.isDepthStencil() and result.params.render_target_hint,
-            .depth_stencil_attachment = format.isDepthStencil() and result.params.render_target_hint,
-
-            .blit_src = blit,
-            .blit_dst = blit,
-            .transfer_src = transfer,
-            .transfer_dst = transfer,
-        };
-        if (@as(@typeInfo(FormatUsage).@"struct".backing_integer.?, @bitCast(format_usage)) == 0)
-            return result;
-        var linear_tiling = false;
-        result.vk_format = getVulkanFormat(format, format_usage, .image_optimal);
-
-        if (result.vk_format == .undefined) {
-            linear_tiling = true;
-            result.vk_format = getVulkanFormat(format, format_usage, .image_linear);
-        }
-
-        const view_mutable_format = false;
-        result.image = device.createImage(&.{
-            .image_type = image_type,
-            .flags = .{
-                .mutable_format_bit = view_mutable_format,
-                .cube_compatible_bit = result.params.cubemap,
-            },
-            .format = result.vk_format,
-            .extent = .{
-                .width = result.size[0],
-                .height = result.size[1],
-                .depth = result.size[2],
-            },
-            .mip_levels = result.params.mip_levels,
-            .array_layers = result.params.array_layers,
-            .samples = .{ .@"1_bit" = true },
-            .tiling = if (linear_tiling) .linear else .optimal,
-            .usage = format_usage.toImageUsage(),
-            .initial_layout = .undefined,
-            .sharing_mode = .exclusive,
-            // sharing_mode: SharingMode,
-            // queue_family_index_count: u32 = 0,
-            // p_queue_family_indices: ?[*]const u32 = null,
-        }, vka) catch return Error.ResourceCreationError;
-        result.memory = try allocateMemory(device.getImageMemoryRequirements(result.image), .{});
-        device.bindImageMemory(result.image, result.memory, 0) catch
-            return Error.ResourceCreationError;
-
-        const mask = compatibleFormat.mask(result.vk_format);
-        result.view = device.createImageView(&.{
-            .image = result.image,
-            .view_type = switch (image_type) {
-                .@"1d" => if (result.params.array_layers > 1) .@"1d_array" else .@"1d",
-                .@"2d" => if (result.params.cubemap)
-                    (if (result.params.array_layers > 1) .cube_array else .cube)
+            const format_usage: FormatUsage = .{
+                .sampled = t.params.filtering != null,
+                .sampled_linear = if (t.params.filtering) |f|
+                    f.shrink == .linear or f.expand == .linear
                 else
-                    (if (result.params.array_layers > 1) .@"2d_array" else .@"2d"),
-                .@"3d" => .@"3d",
-                _ => unreachable,
-            },
-            .format = result.vk_format,
-            .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
-            .subresource_range = .{
-                .aspect_mask = .{
-                    .color_bit = mask.color,
-                    .depth_bit = mask.depth,
-                    .stencil_bit = mask.stencil,
-                },
-                .layer_count = result.params.array_layers,
-                .base_array_layer = 0,
-                .level_count = result.params.mip_levels,
-                .base_mip_level = 0,
-            },
-        }, vka) catch
-            return Error.ResourceCreationError;
+                    false,
 
-        return result;
+                .color_attachment = !p.format.isDepthStencil() and p.capabilities.attachment,
+                .depth_stencil_attachment = p.format.isDepthStencil() and p.capabilities.attachment,
+
+                .blit_src = p.capabilities.blit,
+                .blit_dst = p.capabilities.blit,
+                .transfer_src = p.capabilities.transfer,
+                .transfer_dst = p.capabilities.transfer,
+            };
+
+            //if no usage dont create
+            if (@as(@typeInfo(FormatUsage).@"struct".backing_integer.?, @bitCast(format_usage)) == 0)
+                continue;
+            var linear_tiling = false;
+            t.vk_format = getVulkanFormat(p.format, format_usage, .image_optimal);
+            std.debug.print("VKFORMAT:{} => {}\n", .{ t.format, t.vk_format });
+            if (t.vk_format == .undefined) {
+                linear_tiling = true;
+                t.vk_format = getVulkanFormat(p.format, format_usage, .image_linear);
+            }
+
+            const view_mutable_format = false;
+            t.image = device.createImage(&.{
+                .image_type = image_type,
+                .flags = .{
+                    .mutable_format_bit = view_mutable_format,
+                    .cube_compatible_bit = t.params.cubemap,
+                },
+                .format = t.vk_format,
+                .extent = .{
+                    .width = t.size[0],
+                    .height = t.size[1],
+                    .depth = t.size[2],
+                },
+                .mip_levels = t.params.mip_levels,
+                .array_layers = t.params.array_layers,
+                .samples = .{ .@"1_bit" = true },
+                .tiling = if (linear_tiling) .linear else .optimal,
+                .usage = format_usage.toImageUsage(),
+                .initial_layout = .undefined,
+                .sharing_mode = .exclusive,
+                // sharing_mode: SharingMode,
+                // queue_family_index_count: u32 = 0,
+                // p_queue_family_indices: ?[*]const u32 = null,
+            }, vka) catch return Error.ResourceCreationError;
+        }
+        var memory_allocations: [mt]struct {
+            req: vk.MemoryRequirements,
+            allocation: u32,
+        } = undefined;
+        var index_map: [mt]struct {
+            index: usize,
+            offset: u64 = 0,
+        } = undefined;
+
+        var mem_req_index: usize = 0;
+        for (tex, 0..) |*t, i| {
+            if (t.image == .null_handle) continue;
+            const req = device.getImageMemoryRequirements(t.image);
+            for (memory_allocations[0..mem_req_index], 0..) |*ma, j| {
+                if (req.memory_type_bits == ma.req.memory_type_bits and req.alignment == ma.req.alignment) {
+                    const offset = util.rut(u64, ma.req.size, ma.req.alignment);
+                    ma.req.size += req.size + (offset - ma.req.size);
+                    index_map[i] = .{ .index = j, .offset = offset };
+                    break;
+                }
+            } else {
+                memory_allocations[mem_req_index].req = req;
+                index_map[i] = .{ .index = mem_req_index };
+                mem_req_index += 1;
+            }
+        }
+        for (memory_allocations[0..mem_req_index]) |*ma|
+            ma.allocation = try allocateDeviceMemory(ma.req, .{});
+
+        for (tex, 0..) |*t, i| {
+            if (t.image == .null_handle) continue;
+            t.memory = memory_allocations[index_map[i].index].allocation;
+            device.bindImageMemory(t.image, getMemoryReference(t.memory), index_map[i].offset) catch
+                return Error.ResourceCreationError;
+            const mask = compatibleFormat.mask(t.vk_format);
+            t.view = device.createImageView(&.{
+                .image = t.image,
+                .view_type = switch (@as(vk.ImageType, if (t.size[1] == 1)
+                    .@"1d"
+                else if (t.size[2] == 1) .@"2d" else .@"3d")) {
+                    .@"1d" => if (t.params.array_layers > 1) .@"1d_array" else .@"1d",
+                    .@"2d" => if (t.params.cubemap)
+                        (if (t.params.array_layers > 1) .cube_array else .cube)
+                    else
+                        (if (t.params.array_layers > 1) .@"2d_array" else .@"2d"),
+                    .@"3d" => .@"3d",
+                    _ => unreachable,
+                },
+                .format = t.vk_format,
+                .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+                .subresource_range = .{
+                    .aspect_mask = .{
+                        .color_bit = mask.color,
+                        .depth_bit = mask.depth,
+                        .stencil_bit = mask.stencil,
+                    },
+                    .layer_count = t.params.array_layers,
+                    .base_array_layer = 0,
+                    .level_count = t.params.mip_levels,
+                    .base_mip_level = 0,
+                },
+            }, vka) catch
+                return Error.ResourceCreationError;
+        }
     }
     pub fn destroy(self: *VKTexture) void {
         self.destroyHandles();
@@ -746,21 +896,42 @@ const VKTexture = struct {
         self.view = .null_handle;
         device.destroySampler(self.sampler, vka);
         self.sampler = .null_handle;
-        device.freeMemory(self.memory, vka);
-        self.memory = .null_handle;
+        removeMemoryReference(self.memory);
+        self.memory = ~@as(u32, 0);
+    }
+    pub fn append(self: VKTexture) Error!Texture {
+        const handle: Texture = @enumFromInt(@as(gpu.Handle, @intCast(texture_list.items.len)));
+        try texture_list.append(arena.allocator(), self);
+        return handle;
     }
     pub fn get(handle: Texture) *VKTexture {
         return &texture_list.items[@intFromEnum(handle)];
     }
-    pub fn fromRenderTarget(render_target: RenderTarget) *VKTexture {
-        const index = ~@as(gpu.Handle, 1 << 31) & @intFromEnum(render_target);
-        return &texture_list.items[index];
-    }
+    pub const Capabilites = packed struct(u3) {
+        attachment: bool = false,
+        blit: bool = false,
+        transfer: bool = false,
+
+        pub fn add(self: Capabilites, other: Capabilites) Capabilites {
+            const U = @typeInfo(@This()).@"struct".backing_integer.?;
+            return @bitCast(@as(U, @bitCast(self)) | @as(U, @bitCast(other)));
+        }
+        pub fn isSubset(self: Capabilites, superset: Capabilites) bool {
+            const U = @typeInfo(@This()).@"struct".backing_integer.?;
+            return @as(U, @bitCast(self)) == (@as(U, @bitCast(self)) & @as(U, @bitCast(superset)));
+        }
+    };
+};
+pub const TextureCreateParams = struct {
+    size: math.uvec3 = @splat(1),
+    format: Format = .rgba8_norm,
+    params: gpu.TextureParams = .{},
+    capabilities: VKTexture.Capabilites = .{},
 };
 
 const VKBuffer = struct {
     vk_handle: vk.Buffer = .null_handle,
-    device_memory: vk.DeviceMemory = .null_handle,
+    device_memory: u32 = u32m,
     size: u64 = 0,
     usage: BufferUsage = undefined,
 
@@ -782,9 +953,9 @@ const VKBuffer = struct {
         }, vka) catch return Error.ResourceCreationError;
 
         const memory_requirements = device.getBufferMemoryRequirements(handle);
-        const memory = try allocateMemory(memory_requirements, .{ .host_visible_bit = true });
+        const memory = try allocateDeviceMemory(memory_requirements, .{ .host_visible_bit = true });
 
-        device.bindBufferMemory(handle, memory, 0) catch
+        device.bindBufferMemory(handle, getMemoryReference(memory), 0) catch
             return Error.ResourceCreationError;
         return .{
             .vk_handle = handle,
@@ -795,36 +966,105 @@ const VKBuffer = struct {
     }
     pub fn destroy(self: *VKBuffer) void {
         device.destroyBuffer(self.vk_handle, vka);
+        removeMemoryReference(self.device_memory);
         self.* = .{};
     }
     pub fn get(handle: Buffer) *VKBuffer {
         return &buffer_list.items[@intFromEnum(handle)];
     }
 };
-fn allocateMemory(memory_requirements: vk.MemoryRequirements, flags: vk.MemoryPropertyFlags) Error!vk.DeviceMemory {
+fn accessMemory(index: u32) vk.DeviceMemory {
+    return memory_allocation_list.items[index].memory;
+}
+fn getMemoryReference(index: u32) vk.DeviceMemory {
+    const ptr = &memory_allocation_list.items[index];
+    ptr.ref_count += 1;
+    return ptr.memory;
+}
+fn removeMemoryReference(index: u32) void {
+    const ptr = &memory_allocation_list.items[index];
+    ptr.ref_count -|= 1;
+    if (ptr.ref_count == 0) ptr.free();
+}
+fn allocateDeviceMemory(memory_requirements: vk.MemoryRequirements, flags: vk.MemoryPropertyFlags) Error!u32 {
+    std.debug.print("ALLOC: {d} KiB\n", .{@as(f64, @floatFromInt(memory_requirements.size)) / 1024.0});
     const mem_type: u32 = for (0..physical_device_memory_properties.memory_type_count) |i| {
         if ((memory_requirements.memory_type_bits & (@as(u32, 1) << @as(u5, @intCast(i)))) == 0) continue;
         if (physical_device_memory_properties.memory_types[i].property_flags.contains(flags))
             break @intCast(i);
     } else return Error.ResourceCreationError;
 
-    return device.allocateMemory(&.{
+    const device_memory = device.allocateMemory(&.{
         .allocation_size = memory_requirements.size,
         .memory_type_index = mem_type,
     }, vka) catch
         return Error.ResourceCreationError;
+    const index: u32 = @intCast(memory_allocation_list.items.len);
+    try memory_allocation_list.append(arena.allocator(), .{ .memory = device_memory });
+    return index;
 }
 
-const VKRenderTarget = struct {};
-fn getRenderingResources() Error!?std.meta.Tuple(&.{ RenderTarget, vk.CommandBuffer }) {
-    huge.dassert(current_render_target != null);
-    const rt = if (current_render_target) |render_target| render_target else return null;
-    const cmd = if (VKWindowContext.fromRenderTarget(rt)) |wc|
+const VKRenderTarget = struct {
+    color_attachment: Texture = @enumFromInt(0),
+    depth_stencil_attachment: Texture = @enumFromInt(0),
+    mask: Mask = .{},
+
+    pub fn size(self: VKRenderTarget) math.uvec2 {
+        const ct: *VKTexture = if (self.mask.color)
+            .get(self.color_attachment)
+        else
+            .get(self.depth_stencil_attachment);
+        return .{ ct.size[0], ct.size[1] };
+    }
+
+    pub fn create(
+        tex_size: math.uvec2,
+        color_format: ?Format,
+        depth_stencil_format: ?Format,
+        params: gpu.TextureParams,
+    ) Error!VKRenderTarget {
+        if (color_format == null and depth_stencil_format == null)
+            @panic("both formats are null(should be checked before calling)");
+        var result: VKRenderTarget = .{ .mask = .{
+            .color = color_format != null,
+            .depth_stencil = depth_stencil_format != null,
+        } };
+        var tex_create_params: [2]TextureCreateParams = @splat(.{
+            .size = math.swizzle(tex_size, .xy0),
+            .params = params,
+            .capabilities = .{ .attachment = true },
+        });
+        var i: usize = 0;
+        if (color_format) |f| tex_create_params[util.ipp(&i)].format = f;
+        if (depth_stencil_format) |f| tex_create_params[util.ipp(&i)].format = f;
+        var textures: [2]VKTexture = undefined;
+        try VKTexture.createSlice(&textures, tex_create_params[0..i]);
+
+        if (color_format) |_| result.color_attachment = try textures[0].append();
+        if (depth_stencil_format) |_| result.depth_stencil_attachment = try textures[i - 1].append();
+        return result;
+    }
+    pub fn destroy(self: *VKRenderTarget) void {
+        self.mask = .{};
+    }
+    pub fn append(self: VKRenderTarget) Error!RenderTarget {
+        const handle: RenderTarget = @enumFromInt(@as(gpu.Handle, @intCast(render_target_list.items.len)));
+        try render_target_list.append(arena.allocator(), self);
+        return handle;
+    }
+    pub fn get(handle: RenderTarget) *VKRenderTarget {
+        return &render_target_list.items[~@as(gpu.Handle, 1 << 31) & @intFromEnum(handle)];
+    }
+
+    const Mask = packed struct { color: bool = false, depth_stencil: bool = false };
+};
+fn getRenderingResources() Error!vk.CommandBuffer {
+    huge.dassert(current_render_target != null_render_target);
+    if (current_render_target == null_render_target) return .null_handle;
+    return if (VKWindowContext.fromRenderTarget(current_render_target)) |wc|
         try wc.initRenderingCmd()
     else
         @panic("init rendering resources NOT of WINDOW rt");
-
-    return .{ rt, cmd };
 }
 
 const VKWindowContext = struct {
@@ -863,7 +1103,8 @@ const VKWindowContext = struct {
         self.fif_index = (self.fif_index + 1) % self.fif();
     }
     pub fn initRenderingCmd(self: *VKWindowContext) Error!vk.CommandBuffer {
-        const rt = if (current_render_target) |render_target| render_target else return Error.Unknown;
+        if (current_render_target == null_render_target) return Error.Unknown;
+
         const cmd = try self.getRenderingCmd(.graphics);
         if (~self.acquired_image_index != 0) return cmd;
 
@@ -882,7 +1123,7 @@ const VKWindowContext = struct {
             return Error.ResourceCreationError;
 
         device.beginCommandBuffer(cmd, &.{}) catch return Error.Unknown;
-        const rt_size = renderTargetSize(rt);
+        const rt_size = renderTargetSize(current_render_target);
         device.cmdSetScissor(cmd, 0, 1, &.{.{
             .extent = .{ .width = rt_size[0], .height = rt_size[1] },
             .offset = .{ .x = 0, .y = 0 },
@@ -1019,7 +1260,7 @@ const VKWindowContext = struct {
     fn fromRenderTarget(render_target: RenderTarget) ?*VKWindowContext {
         const int: gpu.Handle = @intFromEnum(render_target);
         if ((int >> 31) == 0) return null;
-        return VKWindowContext.get(@enumFromInt(int & (~@as(gpu.Handle, 0) >> 1)));
+        return VKWindowContext.get(@enumFromInt(int & ~@as(gpu.Handle, 1 << 31)));
     }
 
     pub fn create(window: huge.Window) !VKWindowContext {
@@ -1127,8 +1368,8 @@ const VKWindowContext = struct {
             result.submit_semaphores[i] = try device.createSemaphore(&.{}, vka);
         return result;
     }
-    pub fn destroy(self: *VKWindowContext, handle: WindowContext) void {
-        if (current_render_target != null and current_render_target.? == getWindowContextRenderTarget(handle)) {
+    pub fn destroy(self: *VKWindowContext, handle: ?WindowContext) void {
+        if (handle != null and current_render_target == getWindowContextRenderTarget(handle.?)) {
             self.forceEndRendering();
         }
         device.queueWaitIdle(queue(.presentation)) catch {};
@@ -1240,6 +1481,9 @@ fn deinit() void {
     device.deviceWaitIdle() catch {};
     shader_compiler.deinit();
 
+    const let_os_deinit = false;
+    if (let_os_deinit) return;
+
     for (&command_pools) |cmd_pool| {
         for (&command_pools) |*i| {
             if (cmd_pool == i.*) i.* = .null_handle;
@@ -1247,9 +1491,23 @@ fn deinit() void {
         device.destroyCommandPool(cmd_pool, vka);
     }
     for (shader_module_list.items) |*i| i.destroy();
+    shader_module_list.items = &.{};
     for (pipeline_list.items) |*i| i.destroy();
+    pipeline_list.items = &.{};
     for (buffer_list.items) |*i| i.destroy();
+    buffer_list.items = &.{};
     for (texture_list.items) |*i| i.destroy();
+    texture_list.items = &.{};
+    for (memory_allocation_list.items) |*i| i.free();
+    memory_allocation_list.items = &.{};
+    for (render_target_list.items) |*i| i.destroy();
+    render_target_list.items = &.{};
+    for (window_context_list.items) |*i| i.destroy(null);
+    window_context_list.items = &.{};
+    window_context_primary.destroy(null);
+
+    device.destroyDevice(vka);
+    instance.destroyInstance(vka);
 }
 fn initLogicalDeviceAndQueues(extensions: []const [*:0]const u8) VKError!void {
     var queue_create_infos: [queue_type_count]vk.DeviceQueueCreateInfo = undefined;
@@ -1693,7 +1951,6 @@ const FormatUsageLayout = enum {
 };
 fn getVulkanFormat(format: Format, usage: FormatUsage, layout: FormatUsageLayout) vk.Format {
     return for (compatibleFormat.compatibleFormats(format)) |vkf| {
-        std.debug.print("VKF: {}\n", .{vkf});
         const properties = instance.getPhysicalDeviceFormatProperties(pd().handle, vkf);
         const flags: vk.FormatFeatureFlags = switch (layout) {
             .image_linear => properties.linear_tiling_features,
@@ -1712,7 +1969,7 @@ fn getVulkanFormat(format: Format, usage: FormatUsage, layout: FormatUsageLayout
             (!usage.transfer_src or flags.transfer_src_bit) and
             (!usage.transfer_dst or flags.transfer_dst_bit);
         if (valid) break vkf;
-    } else .undefined;
+    } else .b8g8r8a8_unorm;
 }
 const VKError = error{
     OutOfMemory,
@@ -1746,17 +2003,22 @@ fn versionBackend(version: Version) gpu.Backend {
         .createShaderModulePath = &createShaderModulePath,
         .destroyShaderModule = &destroyShaderModule,
 
+        .renderTargetSize = &renderTargetSize,
+        .createRenderTargetFromTextures = &createRenderTargetFromTextures,
+        .createRenderTarget = &createRenderTarget,
+        .destroyRenderTarget = &destroyRenderTarget,
+
+        .getTextureType = &getTextureType,
+        .getTextureSize = &getTextureSize,
+        .getTextureFormat = &getTextureFormat,
         .createTexture = &createTexture,
         .destroyTexture = &destroyTexture,
-        .getTextureRenderTarget = &getTextureRenderTarget,
 
         .loadBuffer = &loadBuffer,
         .mapBuffer = &mapBuffer,
         .unmapBuffer = &unmapBuffer,
         .createBuffer = &createBuffer,
         .destroyBuffer = &destroyBuffer,
-
-        .renderTargetSize = &renderTargetSize,
 
         .updateWindowContext = &updateWindowContext,
         .getWindowRenderTarget = &getWindowRenderTarget,

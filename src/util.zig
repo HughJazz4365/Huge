@@ -2,6 +2,15 @@ const std = @import("std");
 const huge = @import("root.zig");
 const math = huge.math;
 
+pub fn rut(T: type, a: T, b: T) T {
+    return (a + b - 1) / b * b;
+}
+pub fn ipp(i: anytype) @typeInfo(@TypeOf(i)).pointer.child {
+    const save = i.*;
+    i.* += 1;
+    return save;
+}
+
 pub fn f32fromBool(b: bool) f32 {
     return @floatFromInt(@intFromBool(b));
 }

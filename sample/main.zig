@@ -8,15 +8,6 @@
 // + shader linkage checking
 // + camera movement(mouse input)
 
-// + vulkanBadkend.createTexture => createTextures(plural)
-// so that there can be one allocation for multiple textures
-// maybe even make plural versions of other create funcitons
-
-// + renderTargetSize -> uvec2??
-// + remove texture.renderTarget
-// some object that holds color, depth/stencil attachments
-// like opengl framebuffer
-
 const std = @import("std");
 const huge = @import("huge");
 const math = huge.math;
@@ -46,19 +37,16 @@ pub fn main() !void {
 
     const mesh: huge.rend.MeshRenderer = try .new(@ptrCast(&cube.vertices), u16, &cube.indices);
     var cube_transform: huge.Transform = .{
-        .position = .{ 1, 0, 0 },
+        .position = .{ -1, -0.4, 0 },
         .scale = .{ 2.5, 1, 2 },
     };
+
     // const texture: gpu.Texture = try .create(.{ 2, 2, 0 }, .rgba8_norm, .{});
+    // _ = try texture.renderTarget();
+    _ = try gpu.RenderTarget.create(.{ 1920, 1080 }, .r8_norm, .depth16, .{});
     // std.debug.print("th: {}\n", .{texture});
     // const rt = try texture.renderTarget();
-    const rt = try gpu.RenderTarget.create(.{ 2, 2 }, .rgba8_norm, .depth16, .{});
-
-    std.debug.print("t_rt: {}, size: {d}, wrt: {d}\n", .{
-        rt,
-        rt.size(),
-        window.renderTarget().size(),
-    });
+    // const rt = try gpu.RenderTarget.create(.{ 2, 2 }, .rgba8_norm, .depth16, .{});
 
     var avg: f64 = 0;
     while (window.tick()) {
