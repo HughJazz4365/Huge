@@ -8,17 +8,29 @@ pub fn compatibleFormats(format: gpu.Format) []const vk.Format {
             .b8g8r8a8_unorm,
             .r8g8b8a8_unorm,
             .a8b8g8r8_unorm_pack32,
-            .a2b10g10r10_unorm_pack32,
-            .a2r10g10b10_unorm_pack32,
             .r4g4b4a4_unorm_pack16,
             .b4g4r4a4_unorm_pack16,
             .r5g5b5a1_unorm_pack16,
             .b5g5r5a1_unorm_pack16,
             .a1r5g5b5_unorm_pack16,
-            .r16g16b16a16_unorm,
             .r8g8b8_unorm,
             .b8g8r8_unorm,
+            .a2b10g10r10_unorm_pack32,
+            .a2r10g10b10_unorm_pack32,
             .r16g16b16_unorm,
+            .r16g16b16a16_unorm,
+        },
+        .rgba8 => &.{
+            .r8g8b8a8_uscaled,
+            .b8g8r8a8_uscaled,
+            .a8b8g8r8_uscaled_pack32,
+            .r8g8b8a8_srgb,
+            .b8g8r8a8_srgb,
+            .a8b8g8r8_srgb_pack32,
+
+            .b8g8r8a8_unorm,
+            .r8g8b8a8_unorm,
+            .a8b8g8r8_unorm_pack32,
         },
         .r8_norm => &.{
             .r8_unorm,
@@ -38,11 +50,11 @@ pub fn compatibleFormats(format: gpu.Format) []const vk.Format {
         //depth
         .depth32 => &.{
             .d32_sfloat,
-            .d32_sfloat_s8_uint,
             .d24_unorm_s8_uint,
             .x8_d24_unorm_pack32,
             .d16_unorm_s8_uint,
             .d16_unorm,
+            .d32_sfloat_s8_uint,
             .s8_uint,
         },
         .depth16 => &.{
@@ -74,8 +86,8 @@ pub fn compatibleFormats(format: gpu.Format) []const vk.Format {
         },
         .depth24_stencil8 => &.{
             .d24_unorm_s8_uint,
-            .d32_sfloat_s8_uint,
             .d16_unorm_s8_uint,
+            .d32_sfloat_s8_uint,
             .d32_sfloat,
             .x8_d24_unorm_pack32,
             .d16_unorm,
@@ -90,6 +102,26 @@ pub fn compatibleFormats(format: gpu.Format) []const vk.Format {
             .d16_unorm,
             .s8_uint,
         },
+        .bc1_rgb_norm => &.{.bc1_rgb_unorm_block},
+        .bc1_rgb_srgb => &.{.bc1_rgb_srgb_block},
+        .bc1_rgba_norm => &.{.bc1_rgba_unorm_block},
+        .bc1_rgba_srgb => &.{.bc1_rgba_srgb_block},
+
+        .bc2_norm => &.{.bc2_unorm_block},
+        .bc2_srgb => &.{.bc2_srgb_block},
+
+        .bc3_norm => &.{.bc3_unorm_block},
+        .bc3_srgb => &.{.bc3_srgb_block},
+
+        .bc4_norm => &.{.bc4_unorm_block},
+
+        .bc5_norm => &.{.bc5_unorm_block},
+
+        .bc6_ufloat => &.{.bc6h_ufloat_block},
+        .bc6_sfloat => &.{.bc6h_sfloat_block},
+
+        .bc7_norm => &.{.bc7_unorm_block},
+        .bc7_srgb => &.{.bc7_srgb_block},
         else => &.{},
     };
     // r4g4_unorm_pack8 = 1,

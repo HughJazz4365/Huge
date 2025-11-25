@@ -1,7 +1,7 @@
-// + vertex attribute formats??(from shader compiler)
-// extra locations that dont have match are a validation error
-// not critical tho??
-// non matching location types should def be an error
+// io must only be scalar or vector!!(arrays??)
+
+// 1. uniform buffer
+// 2. hgsl texture
 
 // + descriptor sets, opaque uniforms
 // + obj, png loading
@@ -37,7 +37,7 @@ pub fn main() !void {
 
     const mesh: huge.rend.MeshRenderer = try .new(@ptrCast(&cube.vertices), u16, &cube.indices);
     var cube_transform: huge.Transform = .{
-        .position = .{ -1, -0.4, 0 },
+        .position = .{ -1, -1.4, 2 },
         .scale = .{ 2.5, 1, 2 },
     };
 
@@ -50,7 +50,7 @@ pub fn main() !void {
 
     var avg: f64 = 0;
     while (window.tick()) {
-        if (window.frame_count % 100 == 0) try gpu.reloadPipelines();
+        if (window.frame_count % 200 == 0) try gpu.reloadPipelines();
         if (huge.time.avg64() != avg) {
             avg = huge.time.avg64();
             std.debug.print("AVGFPS: {d}\n", .{1.0 / avg});

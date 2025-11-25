@@ -1,5 +1,4 @@
 .zig-cache/
 zig-out/
 log.txt
-src/gpu/vulkan/vk.zig
 

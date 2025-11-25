@@ -37,8 +37,8 @@ pub fn destroyWindowContext(window_context: WindowContext) void {
     backend.destroyWindowContext(window_context);
 }
 pub fn reloadPipelines() Error!void {
-    if (huge.zigbuiltin.mode == .Debug)
-        try backend.reloadPipelines();
+    // if (huge.zigbuiltin.mode == .Debug)
+    try backend.reloadPipelines();
 }
 pub inline fn coordinateSystem() math.CoordinateSystem {
     return backend.coordinate_system;
@@ -327,23 +327,27 @@ pub const Format = enum {
     depth24_stencil8,
     depth32_stencil8,
 
-    //compressed
-    // bc1_rgb_unorm_block = 131,
-    // bc1_rgb_srgb_block = 132,
-    // bc1_rgba_unorm_block = 133,
-    // bc1_rgba_srgb_block = 134,
-    // bc2_unorm_block = 135,
-    // bc2_srgb_block = 136,
-    // bc3_unorm_block = 137,
-    // bc3_srgb_block = 138,
-    // bc4_unorm_block = 139,
-    // bc4_snorm_block = 140,
-    // bc5_unorm_block = 141,
-    // bc5_snorm_block = 142,
-    // bc6h_ufloat_block = 143,
-    // bc6h_sfloat_block = 144,
-    // bc7_unorm_block = 145,
-    // bc7_srgb_block = 146,
+    //block compressed
+    bc1_rgb_norm,
+    bc1_rgb_srgb,
+    bc1_rgba_norm,
+    bc1_rgba_srgb,
+
+    bc2_norm,
+    bc2_srgb,
+
+    bc3_srgb,
+    bc3_norm,
+
+    bc4_norm,
+
+    bc5_norm,
+
+    bc6_sfloat,
+    bc6_ufloat,
+
+    bc7_norm,
+    bc7_srgb,
     pub fn isDepthStencil(self: Format) bool {
         return switch (self) {
             .depth32,
@@ -385,12 +389,14 @@ pub const Error = error{
     ShaderCompilationError,
     ShaderEntryPointNotFound,
     ShaderPushConstantOutOfBounds,
+    PipelineStageIOMismatch,
 
     NonMatchingRenderTargetAttachmentSizes,
     NonMatchingRenderAttachmentParams,
     WrongFormat,
     WrongTextureType,
     InvalidImageType,
+
     BufferMisuse,
     MemoryRemap,
 
