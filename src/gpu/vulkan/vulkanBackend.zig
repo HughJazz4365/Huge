@@ -87,10 +87,9 @@ const MemoryAllocation = struct {
 };
 //======|methods|========
 
-fn draw(handle: Pipeline, params: gpu.DrawParams) Error!void {
-    const cmd = try getRenderingResources();
+fn draw(handle: Pipeline, params: gpu.DrawParams) void {
+    const cmd = getDrawCommandCmd(.graphics);
     if (cmd == .null_handle) return;
-
     errdefer forceEndRendering();
 
     device.cmdBindPipeline(cmd, .graphics, VKPipeline.get(handle).vk_handle);
@@ -111,13 +110,14 @@ fn draw(handle: Pipeline, params: gpu.DrawParams) Error!void {
         params.instance_offset,
     );
 }
-fn bindIndexBuffer(handle: Buffer, index_type: gpu.IndexType) Error!void {
-    const cmd = try getRenderingResources();
+fn bindIndexBuffer(handle: Buffer, index_type: gpu.IndexType) void {
+    const cmd = getDrawCommandCmd(.graphics);
     if (cmd == .null_handle) return;
     errdefer forceEndRendering();
 
     const buffer: *VKBuffer = .get(handle);
-    if (buffer.usage != .index) return Error.BufferMisuse;
+    huge.dassert(buffer.usage == .index);
+    if (buffer.usage != .index) return;
 
     if (api_version.minor < 4 and index_type == .u8)
         @panic("TODO: index_type u8 extension");
@@ -127,22 +127,24 @@ fn bindIndexBuffer(handle: Buffer, index_type: gpu.IndexType) Error!void {
         .u8 => .uint8, //only in core spec from 1_4
     });
 }
-fn bindVertexBuffer(handle: Buffer) Error!void {
-    const cmd = try getRenderingResources();
+fn bindVertexBuffer(handle: Buffer) void {
+    const cmd = getDrawCommandCmd(.graphics);
     if (cmd == .null_handle) return;
     errdefer forceEndRendering();
 
     const buffer: *VKBuffer = .get(handle);
-    if (buffer.usage != .vertex) return Error.BufferMisuse;
+    huge.dassert(buffer.usage == .vertex);
+    if (buffer.usage != .vertex) return;
 
     device.cmdBindVertexBuffers(cmd, 0, 1, &.{buffer.vk_handle}, &.{0});
 }
+
 fn beginRendering(render_target: RenderTarget, clear_value: ClearValue) Error!void {
     try endRendering();
 
     current_render_target = render_target;
     if (VKWindowContext.fromRenderTarget(render_target)) |wc| {
-        try wc.setRenderTargetState(clear_value);
+        try wc.beginRenderingToWindow(clear_value);
     } else @panic("begin rendering NOT to WINDOW");
 }
 fn endRendering() Error!void {
@@ -150,7 +152,7 @@ fn endRendering() Error!void {
     defer current_render_target = null_render_target;
 
     if (VKWindowContext.fromRenderTarget(current_render_target)) |wc| {
-        try wc.endRendering();
+        try wc.endRenderingToWindow();
     } else @panic("end rendering NOT to WINDOW");
 }
 
@@ -182,10 +184,11 @@ fn pipelinePushConstant(
     local_offset: u32,
     local_size: u32,
     ptr: *const anyopaque,
-) Error!void {
+) void {
     _ = .{ local_offset, local_size };
-    const cmd = try getRenderingResources();
+    const cmd = getDrawCommandCmd(.graphics);
     if (cmd == .null_handle) return;
+    errdefer forceEndRendering();
 
     const pipeline: *VKPipeline = .get(handle);
 
@@ -195,7 +198,7 @@ fn pipelinePushConstant(
         pcloop: for (ep_info.push_constant_mappings) |pc| {
             if (util.strEql(name, pc.name)) {
                 if (pc.offset + pc.size > max_push_constant_bytes)
-                    return Error.ShaderPushConstantOutOfBounds;
+                    return; //out of bounds
                 //dont repeat cmdPushConstants call with the same offset
                 for (offsets[0..offset_count]) |o| if (o == pc.offset) continue :pcloop;
 
@@ -1071,11 +1074,11 @@ const VKRenderTarget = struct {
 
     const Mask = packed struct { color: bool = false, depth_stencil: bool = false };
 };
-fn getRenderingResources() Error!vk.CommandBuffer {
+fn getDrawCommandCmd(queue_type: QueueType) vk.CommandBuffer {
     huge.dassert(current_render_target != null_render_target);
     if (current_render_target == null_render_target) return .null_handle;
     return if (VKWindowContext.fromRenderTarget(current_render_target)) |wc|
-        try wc.initRenderingCmd()
+        wc.beginCmd(queue_type) catch .null_handle
     else
         @panic("init rendering resources NOT of WINDOW rt");
 }
@@ -1105,21 +1108,16 @@ const VKWindowContext = struct {
     fences: [mfif]vk.Fence = @splat(.null_handle),
 
     //render target
-    rendering_cmds: [mfif * queue_type_count]vk.CommandBuffer = @splat(.null_handle),
-    clear_value: ClearValue = undefined,
+    cmds: [mfif][queue_type_count]vk.CommandBuffer = @splat(@splat(.null_handle)),
+    cmd_mask: u64 = 0,
 
     inline fn fif(self: VKWindowContext) u32 {
         return @max(@max(self.image_count, 1) - 1, 1);
     }
-    pub fn setRenderTargetState(self: *VKWindowContext, clear_value: ClearValue) Error!void {
-        self.clear_value = clear_value;
+    pub fn beginRenderingToWindow(self: *VKWindowContext, clear_value: ClearValue) Error!void {
         self.fif_index = (self.fif_index + 1) % self.fif();
-    }
-    pub fn initRenderingCmd(self: *VKWindowContext) Error!vk.CommandBuffer {
-        if (current_render_target == null_render_target) return Error.Unknown;
 
-        const cmd = try self.getRenderingCmd(.graphics);
-        if (~self.acquired_image_index != 0) return cmd;
+        if (~self.acquired_image_index != 0) return;
 
         _ = device.waitForFences(1, &.{self.fences[self.fif_index]}, .true, timeout) catch
             return Error.SynchronisationError;
@@ -1132,15 +1130,15 @@ const VKWindowContext = struct {
             .null_handle,
         ) catch return Error.ResourceCreationError).image_index;
 
-        device.resetCommandBuffer(cmd, .{}) catch
-            return Error.ResourceCreationError;
+        //begin on demand
+        const cmd = try self.beginCmd(.graphics);
 
-        device.beginCommandBuffer(cmd, &.{}) catch return Error.Unknown;
         const rt_size = renderTargetSize(current_render_target);
         device.cmdSetScissor(cmd, 0, 1, &.{.{
             .extent = .{ .width = rt_size[0], .height = rt_size[1] },
             .offset = .{ .x = 0, .y = 0 },
         }});
+
         device.cmdSetViewport(cmd, 0, 1, &.{.{
             .x = 0,
             .y = 0,
@@ -1161,7 +1159,7 @@ const VKWindowContext = struct {
                 .load_op = .clear,
                 .store_op = .store,
                 .clear_value = .{
-                    .color = if (self.clear_value.color) |cc|
+                    .color = if (clear_value.color) |cc|
                         .{ .float_32 = @as(*const [4]f32, @ptrCast(&cc)).* }
                     else
                         .{ .float_32 = @splat(0) },
@@ -1177,25 +1175,35 @@ const VKWindowContext = struct {
             // p_depth_attachment: ?*const RenderingAttachmentInfo = null,
             // p_stencil_attachment: ?*const RenderingAttachmentInfo = null,
         });
-        return cmd;
     }
 
-    pub fn endRendering(self: *VKWindowContext) Error!void {
+    pub fn endRenderingToWindow(self: *VKWindowContext) Error!void {
         defer self.acquired_image_index = u32m;
 
-        const cmd = self.getRenderingCmdOpt(.graphics);
-        if (cmd == .null_handle) return;
-        device.cmdEndRendering(cmd);
-        self.present(cmd) catch
+        device.cmdEndRendering(self.getCmd(.graphics));
+        for (self.cmds[self.fif_index], 0..) |cmd, i| {
+            if (cmd != .null_handle and
+                self.getBit(@enumFromInt(i), self.cmd_mask) and
+                pd().getUniqueQFIIndex(@enumFromInt(i)) != pd().getUniqueQFIIndex(.presentation))
+            {
+                device.endCommandBuffer(cmd) catch
+                    return Error.PresentationError;
+                self.flipBit(@enumFromInt(i), &self.cmd_mask);
+            }
+        } //submit all queues that were recorded
+        self.present(self.getCmd(.presentation)) catch
             return Error.PresentationError;
+        self.flipBit(.presentation, &self.cmd_mask);
     }
     pub fn forceEndRendering(self: *VKWindowContext) void {
         defer self.acquired_image_index = u32m;
 
-        const cmd = self.getRenderingCmdOpt(.graphics);
-        if (cmd == .null_handle) return;
-        device.cmdEndRendering(cmd);
-        device.endCommandBuffer(cmd) catch {};
+        device.cmdEndRendering(self.getCmd(.graphics));
+        for (self.cmds[self.fif_index], 0..) |cmd, i| {
+            if (cmd != .null_handle and i != pd().getUniqueQFIIndex(.presentation))
+                device.endCommandBuffer(cmd) catch {};
+        } //submit all queues that were recorded
+        device.endCommandBuffer(self.getCmd(.presentation)) catch {};
         device.queueSubmit(queue(.presentation), 1, &.{.{
             .command_buffer_count = 0,
             .p_wait_dst_stage_mask = &.{.{ .color_attachment_output_bit = true }},
@@ -1203,14 +1211,27 @@ const VKWindowContext = struct {
             .p_wait_semaphores = &.{self.acquire_semaphores[self.fif_index]},
         }}, self.fences[self.fif_index]) catch {};
     }
-    fn getRenderingCmd(self: *VKWindowContext, queue_type: QueueType) Error!vk.CommandBuffer {
-        const ptr = &self.rendering_cmds[@intFromEnum(queue_type) + self.fif_index * queue_type_count];
-        if (ptr.* == .null_handle)
-            ptr.* = try allocCommandBuffer(queue_type, .primary);
-        return ptr.*;
+    fn beginCmd(self: *VKWindowContext, queue_type: QueueType) Error!vk.CommandBuffer {
+        const cmd = self.getCmd(queue_type);
+        if (!self.getBit(queue_type, self.cmd_mask) and cmd != .null_handle) {
+            device.resetCommandBuffer(cmd, .{}) catch
+                return Error.ResourceCreationError;
+            device.beginCommandBuffer(cmd, &.{}) catch
+                return Error.ResourceCreationError;
+            self.flipBit(queue_type, &self.cmd_mask);
+        }
+        return cmd;
     }
-    fn getRenderingCmdOpt(self: *VKWindowContext, queue_type: QueueType) vk.CommandBuffer {
-        return self.rendering_cmds[@intFromEnum(queue_type) + self.fif_index * queue_type_count];
+    fn getCmd(self: *VKWindowContext, queue_type: QueueType) vk.CommandBuffer {
+        return self.cmds[self.fif_index][pd().getUniqueQFIIndex(queue_type)];
+    }
+    fn getBit(self: *VKWindowContext, queue_type: QueueType, mask: u64) bool {
+        const bit: u6 = @truncate(queue_type_count * self.fif_index + pd().getUniqueQFIIndex(queue_type));
+        return ((mask) >> bit) & 1 > 0;
+    }
+    fn flipBit(self: *VKWindowContext, queue_type: QueueType, mask: *u64) void {
+        const bit: u6 = @truncate(queue_type_count * self.fif_index + pd().getUniqueQFIIndex(queue_type));
+        mask.* ^= @as(u64, 1) << bit;
     }
 
     fn present(self: VKWindowContext, cmd: vk.CommandBuffer) !void {
@@ -1376,9 +1397,16 @@ const VKWindowContext = struct {
         for (0..result.fif()) |i| {
             result.acquire_semaphores[i] = try device.createSemaphore(&.{}, vka);
             result.fences[i] = try device.createFence(&.{ .flags = .{ .signaled_bit = true } }, vka);
+            for (0..queue_type_count) |j| {
+                if (~pd().queue_family_indices[j] == 0) continue;
+                const index = pd().getUniqueQFIIndex(@enumFromInt(j));
+                if (result.cmds[i][index] == .null_handle)
+                    result.cmds[i][index] = try allocateCommandBuffer(@enumFromInt(i), .primary);
+            }
         }
         for (0..result.image_count) |i|
             result.submit_semaphores[i] = try device.createSemaphore(&.{}, vka);
+
         return result;
     }
     pub fn destroy(self: *VKWindowContext, handle: ?WindowContext) void {
@@ -1425,7 +1453,7 @@ fn commandPool(queue_type: QueueType) Error!vk.CommandPool {
     }
     return command_pools[index];
 }
-fn allocCommandBuffer(queue_type: QueueType, level: vk.CommandBufferLevel) Error!vk.CommandBuffer {
+fn allocateCommandBuffer(queue_type: QueueType, level: vk.CommandBufferLevel) Error!vk.CommandBuffer {
     var result: vk.CommandBuffer = .null_handle;
     device.allocateCommandBuffers(&.{
         .command_pool = try commandPool(queue_type),
@@ -1836,6 +1864,20 @@ const PhysicalDevice = struct {
     type: vk.PhysicalDeviceType = .discrete_gpu,
 
     pub const max_name_len = 128;
+
+    pub fn getUniqueQFIIndex(self: *const PhysicalDevice, queue_type: QueueType) usize {
+        const qfi = self.queueFamilyIndex(queue_type);
+        var unique_qfi: [queue_type_count]u8 = @splat(0xff);
+        var count: usize = 0;
+
+        return for (&self.queue_family_indices) |q| {
+            if (q == qfi) break count;
+            for (unique_qfi[0..count]) |u| (if (u == q) break) else {
+                unique_qfi[count] = q;
+                count += 1;
+            }
+        } else unreachable;
+    }
     pub fn queueFamilyIndex(self: *const PhysicalDevice, queue_type: QueueType) u8 {
         return self.queue_family_indices[@intFromEnum(queue_type)];
     }

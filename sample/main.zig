@@ -61,11 +61,11 @@ pub fn main() !void {
         camera_transform.position += math.scale(window.warsudVector(), huge.time.delta() * speed);
 
         try gpu.beginRendering(window.renderTarget(), .{ .color = @splat(0.14) });
-        try pipeline.setPropertiesStruct(.{
+        pipeline.setPropertiesStruct(.{
             .model = &cube_transform,
             .vp = &camera,
         });
-        try mesh.draw(pipeline);
+        mesh.draw(pipeline);
 
         try gpu.endRendering();
     }

@@ -8,10 +8,10 @@ pub const MeshRenderer = struct {
     index_buffer: ?gpu.Buffer = null,
     vertex_buffer: gpu.Buffer = undefined,
 
-    pub fn draw(self: MeshRenderer, pipeline: gpu.Pipeline) !void {
-        try self.vertex_buffer.bindVertex();
-        if (self.index_buffer) |ib| try ib.bindIndex(self.index_type);
-        try gpu.draw(pipeline, .{
+    pub fn draw(self: MeshRenderer, pipeline: gpu.Pipeline) void {
+        self.vertex_buffer.bindVertex();
+        if (self.index_buffer) |ib| ib.bindIndex(self.index_type);
+        gpu.draw(pipeline, .{
             .count = self.count,
             .indexed_vertex_offset = if (self.index_buffer) |_| 0 else null,
         });

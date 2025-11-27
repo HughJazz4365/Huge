@@ -10,16 +10,19 @@ coordinate_system: huge.math.CoordinateSystem = .right_handed,
 
 deinit: *const DeinitFn = undefined,
 
+//draw commands
 draw: *const DrawFn = undefined,
 bindVertexBuffer: *const BindVertexBufferFn = undefined,
 bindIndexBuffer: *const BindIndexBufferFn = undefined,
+pipelinePushConstant: *const PipelinePushConstantFn = undefined,
+setPipelineOpaqueUniform: *const SetPipelineOpaqueUniformFn = undefined,
 
+//draw control flow
 beginRendering: *const BeginRenderingFn = undefined,
 endRendering: *const EndRenderingFn = undefined,
 
+//resource/state management
 reloadPipelines: *const ReloadPipelinesFn = undefined,
-pipelinePushConstant: *const PipelinePushConstantFn = undefined,
-setPipelineOpaqueUniform: *const SetPipelineOpaqueUniformFn = undefined,
 getDefaultPipeline: *const GetDefaultPipelineFn = undefined,
 createPipeline: *const CreatePipelineFn = undefined,
 destroyPipeline: *const DestroyPipelineFn = undefined,
@@ -51,15 +54,16 @@ getWindowRenderTarget: *const GetWindowRenderTargetFn = undefined,
 createWindowContext: *const CreateWindowContextFn = undefined,
 destroyWindowContext: *const DestroyWindowContextFn = undefined,
 
-pub const DrawFn = fn (Pipeline, gpu.DrawParams) Error!void;
-pub const BindVertexBufferFn = fn (Buffer) Error!void;
-pub const BindIndexBufferFn = fn (Buffer, gpu.IndexType) Error!void;
+pub const DrawFn = fn (Pipeline, gpu.DrawParams) void;
+pub const BindVertexBufferFn = fn (Buffer) void;
+pub const BindIndexBufferFn = fn (Buffer, gpu.IndexType) void;
+pub const PipelinePushConstantFn = fn (Pipeline, []const u8, u32, u32, *const anyopaque) void;
+pub const SetPipelineOpaqueUniformFn = fn (Pipeline, []const u8, u32, u32, gpu.OpaqueType, gpu.Handle) void;
+
 pub const BeginRenderingFn = fn (RenderTarget, gpu.ClearValue) Error!void;
 pub const EndRenderingFn = fn () Error!void;
 
 pub const ReloadPipelinesFn = fn () Error!void;
-pub const PipelinePushConstantFn = fn (Pipeline, []const u8, u32, u32, *const anyopaque) Error!void;
-pub const SetPipelineOpaqueUniformFn = fn (Pipeline, []const u8, u32, u32, gpu.OpaqueType, gpu.Handle) Error!void;
 pub const GetDefaultPipelineFn = fn (gpu.PipelineType) Pipeline;
 pub const CreatePipelineFn = fn ([]const ShaderModule, gpu.PipelineParams) Error!Pipeline;
 pub const DestroyPipelineFn = fn (Pipeline) void;

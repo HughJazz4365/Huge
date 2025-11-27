@@ -9,24 +9,27 @@ var backend: Backend = undefined; //default to software renderer??
 
 //=======|methods|=======
 
-pub fn draw(pipeline: Pipeline, params: DrawParams) Error!void {
-    try backend.draw(pipeline, params);
+//draw commands
+pub fn draw(pipeline: Pipeline, params: DrawParams) void {
+    backend.draw(pipeline, params);
 }
-pub fn clear(value: ClearValue) Error!void {
-    try backend.clear(value);
+pub fn clear(value: ClearValue) void {
+    backend.clear(value);
 }
-pub fn bindVertexBuffer(buffer: Buffer) Error!void {
-    try backend.bindVertexBuffer(buffer);
+pub fn bindVertexBuffer(buffer: Buffer) void {
+    backend.bindVertexBuffer(buffer);
 }
-pub fn bindIndexBuffer(buffer: Buffer, index_type: IndexType) Error!void {
-    try backend.bindIndexBuffer(buffer, index_type);
+pub fn bindIndexBuffer(buffer: Buffer, index_type: IndexType) void {
+    backend.bindIndexBuffer(buffer, index_type);
 }
+//draw control flow
 pub fn beginRendering(render_target: RenderTarget, clear_value: ClearValue) Error!void {
     try backend.beginRendering(render_target, clear_value);
 }
 pub fn endRendering() Error!void {
     try backend.endRendering();
 }
+//resource/state management
 pub fn getWindowRenderTarget(window: huge.Window) RenderTarget {
     return backend.getWindowRenderTarget(window);
 }
@@ -81,7 +84,7 @@ pub const ClearValue = struct {
 pub const Pipeline = enum(u32) {
     _,
     pub const max_pipeline_stages = 3;
-    pub fn setPropertiesStruct(self: Pipeline, values: anytype) Error!void {
+    pub fn setPropertiesStruct(self: Pipeline, values: anytype) void {
         const tinfo = @typeInfo(@TypeOf(values));
         const T = if (tinfo == .pointer) tinfo.pointer.child else @TypeOf(values);
         if (@typeInfo(T) != .@"struct")
@@ -91,17 +94,17 @@ pub const Pipeline = enum(u32) {
         else
             &values))[0];
         inline for (@typeInfo(T).@"struct".fields) |sf|
-            try self.setProperty(sf.name, @field(ptr, sf.name));
+            self.setProperty(sf.name, @field(ptr, sf.name));
     }
 
-    pub fn setProperty(self: Pipeline, name: []const u8, value: anytype) Error!void {
+    pub fn setProperty(self: Pipeline, name: []const u8, value: anytype) void {
         const T = if (@typeInfo(@TypeOf(value)) == .pointer) @typeInfo(@TypeOf(value)).pointer.child else @TypeOf(value);
         const ptr: *const T = if (@typeInfo(@TypeOf(value)) == .pointer) value else &value;
         switch (T) {
-            huge.Transform => try backend.pipelinePushConstant(self, name, 0, 0, &ptr.modelMat()),
-            huge.Camera => try backend.pipelinePushConstant(self, name, 0, 0, &ptr.viewProjectionMat()),
-            Buffer => try backend.setPipelineOpaqueUniform(self, name, 0, 0, .buffer, @intFromEnum(value)),
-            else => try backend.pipelinePushConstant(self, name, 0, 0, ptr),
+            huge.Transform => backend.pipelinePushConstant(self, name, 0, 0, &ptr.modelMat()),
+            huge.Camera => backend.pipelinePushConstant(self, name, 0, 0, &ptr.viewProjectionMat()),
+            Buffer => backend.setPipelineOpaqueUniform(self, name, 0, 0, .buffer, @intFromEnum(value)),
+            else => backend.pipelinePushConstant(self, name, 0, 0, ptr),
         }
     }
     pub fn createPath(pipeline_source: PipelineSourcePath, params: PipelineParams) Error!Pipeline {
@@ -397,7 +400,6 @@ pub const Error = error{
     WrongTextureType,
     InvalidImageType,
 
-    BufferMisuse,
     MemoryRemap,
 
     PresentationError,
