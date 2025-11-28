@@ -15,6 +15,8 @@ context: huge.gpu.WindowContext = undefined,
 current_input_mask: [input_mask_len]usize = @splat(0),
 last_input_mask: [input_mask_len]usize = @splat(0),
 
+last_cursor_pos: math.vec2 = @splat(0),
+
 frame_count: u64 = 0,
 const input_mask_len = (512 / 8) / @sizeOf(usize);
 
@@ -27,12 +29,27 @@ pub fn tick(self: *Window) bool {
     const should = self.shouldClose();
     if (should) return false;
     self.frame_count += 1;
+    self.last_cursor_pos = self.getCursorPos();
     pollEvents();
     huge.time.tick();
     self.querryInput();
     return true;
 }
 
+pub fn disableCursor(self: *const Window) void {
+    glfw.setInputMode(self.handle, glfw.Cursor, glfw.CursorDisabled);
+}
+pub fn getCursorDelta(self: *const Window) math.vec2 {
+    const aspect = self.aspectRatio();
+    return (self.getCursorPos() - self.last_cursor_pos) *
+        math.scale(math.vec2{ aspect, -1 }, huge.time.delta());
+}
+
+pub fn getCursorPos(self: *const Window) math.vec2 {
+    var pos: [2]f64 = @splat(0);
+    glfw.getCursorPos(self.handle, &pos[0], &pos[1]);
+    return .{ @floatCast(pos[0]), @floatCast(pos[1]) };
+}
 // test 3d movement input (wasd - wars)
 pub fn warsudVector(self: *const Window) math.vec3 {
     return .{

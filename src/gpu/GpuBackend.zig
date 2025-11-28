@@ -15,7 +15,7 @@ draw: *const DrawFn = undefined,
 bindVertexBuffer: *const BindVertexBufferFn = undefined,
 bindIndexBuffer: *const BindIndexBufferFn = undefined,
 pipelinePushConstant: *const PipelinePushConstantFn = undefined,
-setPipelineOpaqueUniform: *const SetPipelineOpaqueUniformFn = undefined,
+pipelineSetOpaqueUniform: *const PipelineSetOpaqueUniformFn = undefined,
 
 //draw control flow
 beginRendering: *const BeginRenderingFn = undefined,
@@ -41,6 +41,7 @@ getTextureFormat: *const GetTextureFormatFn = undefined,
 createTexture: *const CreateTextureFn = undefined,
 destroyTexture: *const DestroyTextureFn = undefined,
 
+getBufferUsage: *const GetBufferUsageFn = undefined,
 loadBuffer: *const LoadBufferFn = undefined,
 mapBuffer: *const MapBufferFn = undefined,
 unmapBuffer: *const UnmapBufferFn = undefined,
@@ -58,7 +59,7 @@ pub const DrawFn = fn (Pipeline, gpu.DrawParams) void;
 pub const BindVertexBufferFn = fn (Buffer) void;
 pub const BindIndexBufferFn = fn (Buffer, gpu.IndexType) void;
 pub const PipelinePushConstantFn = fn (Pipeline, []const u8, u32, u32, *const anyopaque) void;
-pub const SetPipelineOpaqueUniformFn = fn (Pipeline, []const u8, u32, u32, gpu.OpaqueType, gpu.Handle) void;
+pub const PipelineSetOpaqueUniformFn = fn (Pipeline, []const u8, u32, u32, gpu.OpaqueType, gpu.Handle) void;
 
 pub const BeginRenderingFn = fn (RenderTarget, gpu.ClearValue) Error!void;
 pub const EndRenderingFn = fn () Error!void;
@@ -82,6 +83,7 @@ pub const GetTextureFormatFn = fn (Texture) gpu.Format;
 pub const CreateTextureFn = fn (math.uvec3, gpu.Format, gpu.TextureParams) Error!Texture;
 pub const DestroyTextureFn = fn (Texture) void;
 
+pub const GetBufferUsageFn = fn (Buffer) gpu.BufferUsage;
 pub const LoadBufferFn = fn (Buffer, []const u8, usize) Error!void;
 pub const MapBufferFn = fn (Buffer, usize, usize) Error![]u8;
 pub const UnmapBufferFn = fn (Buffer) void;

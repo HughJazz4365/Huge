@@ -5,8 +5,7 @@
 
 // + descriptor sets, opaque uniforms
 // + obj, png loading
-// + shader linkage checking
-// + camera movement(mouse input)
+// + camera movement
 
 const std = @import("std");
 const huge = @import("huge");
@@ -41,6 +40,7 @@ pub fn main() !void {
         .scale = .{ 2.5, 1, 2 },
     };
 
+    const ubo: gpu.Buffer = try .create(12, .uniform);
     // const texture: gpu.Texture = try .create(.{ 2, 2, 0 }, .rgba8_norm, .{});
     // _ = try texture.renderTarget();
     _ = try gpu.RenderTarget.create(.{ 1920, 1080 }, .r8_norm, .depth16, .{});
@@ -49,7 +49,12 @@ pub fn main() !void {
     // const rt = try gpu.RenderTarget.create(.{ 2, 2 }, .rgba8_norm, .depth16, .{});
 
     var avg: f64 = 0;
+    // if (true) return;
+    window.disableCursor();
     while (window.tick()) {
+        cube_transform.position += math.vectorCast(math.vec3, window.getCursorDelta());
+        // const cpos = window.getCursorDelta();
+        // std.debug.print("cpos: {d}\n", .{cpos});
         if (window.frame_count % 200 == 0) try gpu.reloadPipelines();
         if (huge.time.avg64() != avg) {
             avg = huge.time.avg64();
@@ -60,10 +65,13 @@ pub fn main() !void {
         cube_transform.rotation = math.quatFromEuler(.{ 0, huge.time.seconds(), 0 });
         camera_transform.position += math.scale(window.warsudVector(), huge.time.delta() * speed);
 
+        try ubo.loadBytes(@ptrCast(@alignCast(&camera_transform.position)), 0);
+
         try gpu.beginRendering(window.renderTarget(), .{ .color = @splat(0.14) });
         pipeline.setPropertiesStruct(.{
             .model = &cube_transform,
             .vp = &camera,
+            .ubo = ubo,
         });
         mesh.draw(pipeline);
 

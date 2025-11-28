@@ -1,3 +1,7 @@
+uniform ubo : @Buffer(struct{
+	member eye_pos: vec3
+}, .ubo)
+
 const vert = entrypoint(.vertex){
 	push vp, model : mat4
 	in pos, normal: vec3
@@ -13,19 +17,18 @@ const frag = entrypoint(.fragment){
 	const albedo : vec3 = .{1.0, 0.4, 0.1}
 
 	//ubo start
-	const light_dir  = |vec3{3, -9, 1}
+	const light_dir = |vec3{3, -9, 1}
 	const ambient = 0.15
 	const spec_pow = 20
 	const spec_intensity = 1
-
-	const eye_pos: vec3 = .{0}
 	//ubo end
 
+	const view_dir = |(ubo.eye_pos - world_pos)
 	const diffuse = -light_dir *** normal
 
-	const view_dir = |(eye_pos - world_pos)
-	const specular = (@reflect(-light_dir, normal) *** view_dir) ^ spec_pow * spec_intensity * diffuse
+	const specular = (@reflect(-light_dir, normal) *** view_dir) ^ spec_pow * spec_intensity
 
+	//out o: vec4 = .{albedo * .{ specular}, 1}
 	out o: vec4 = .{albedo * .{diffuse + ambient + specular}, 1}
 }
 

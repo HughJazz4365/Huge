@@ -1,5 +1,5 @@
 const std = @import("std");
-const huge = @import("root");
+const huge = @import("root.zig");
 
 pub const pi = std.math.pi;
 pub const d2r = std.math.rad_per_deg;

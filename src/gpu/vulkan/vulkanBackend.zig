@@ -85,14 +85,16 @@ const MemoryAllocation = struct {
         self.memory = .null_handle;
     }
 };
+
+var descriptor_pools: [10]vk.DescriptorPool = @splat(.null_handle);
 //======|methods|========
 
 fn draw(handle: Pipeline, params: gpu.DrawParams) void {
     const cmd = getDrawCommandCmd(.graphics);
     if (cmd == .null_handle) return;
-    errdefer forceEndRendering();
 
-    device.cmdBindPipeline(cmd, .graphics, VKPipeline.get(handle).vk_handle);
+    VKPipeline.get(handle).bind(cmd, .graphics);
+
     if (params.indexed_vertex_offset) |vo| {
         device.cmdDrawIndexed(
             cmd,
@@ -113,7 +115,6 @@ fn draw(handle: Pipeline, params: gpu.DrawParams) void {
 fn bindIndexBuffer(handle: Buffer, index_type: gpu.IndexType) void {
     const cmd = getDrawCommandCmd(.graphics);
     if (cmd == .null_handle) return;
-    errdefer forceEndRendering();
 
     const buffer: *VKBuffer = .get(handle);
     huge.dassert(buffer.usage == .index);
@@ -130,7 +131,6 @@ fn bindIndexBuffer(handle: Buffer, index_type: gpu.IndexType) void {
 fn bindVertexBuffer(handle: Buffer) void {
     const cmd = getDrawCommandCmd(.graphics);
     if (cmd == .null_handle) return;
-    errdefer forceEndRendering();
 
     const buffer: *VKBuffer = .get(handle);
     huge.dassert(buffer.usage == .vertex);
@@ -178,6 +178,59 @@ fn reloadPipelines() Error!void {
     forceEndRendering();
 }
 // setPipelineOpaqueUniform: SetPipelineOpaqueUniformFn = undefined,
+fn pipelineSetOpaqueUniform(
+    handle: Pipeline,
+    name: []const u8,
+    local_offset: u32,
+    local_size: u32,
+    opaque_type: gpu.OpaqueType,
+    uniform_handle: gpu.Handle,
+) void {
+    _ = .{ local_offset, local_size };
+    const cmd = getDrawCommandCmd(.graphics);
+    if (cmd == .null_handle) return;
+
+    const pipeline: *VKPipeline = .get(handle);
+
+    const mapping: hgsl.OpaqueUniformMapping = .{
+        .name = name,
+        .type = opaque_type,
+        .binding = 0,
+        .descriptor_set = 0,
+    };
+    const ptr: *const anyopaque = switch (opaque_type) {
+        .ssbo, .ubo => blk: {
+            const buffer = VKBuffer.get(@enumFromInt(uniform_handle));
+            //buffer misuse
+            if ((opaque_type == .ssbo and buffer.usage != .storage) or
+                (opaque_type == .ubo and buffer.usage != .uniform)) return;
+            break :blk @ptrCast(@alignCast(&vk.DescriptorBufferInfo{
+                .buffer = buffer.vk_handle,
+                .offset = 0,
+                .range = buffer.size,
+            }));
+        },
+        else => @panic("idk this opaque uniform descriptor"),
+    };
+
+    device.updateDescriptorSets(1, &.{.{
+        .dst_set = pipeline.descriptor_set,
+        .dst_binding = mapping.binding,
+        .dst_array_element = local_offset,
+        .descriptor_count = 1,
+        .descriptor_type = getDescriptorType(opaque_type),
+        .p_image_info = if (opaque_type == .texture)
+            @ptrCast(@alignCast(ptr))
+        else
+            &.{},
+        .p_buffer_info = if (opaque_type == .ssbo or opaque_type == .ubo)
+            @ptrCast(@alignCast(ptr))
+        else
+            &.{},
+        .p_texel_buffer_view = &.{},
+    }}, 0, null);
+    // device.cmdUpdateBuffer(command_buffer: CommandBuffer, dst_buffer: Buffer, dst_offset: u64, data_size: u64, p_data: *const anyopaque)
+}
 fn pipelinePushConstant(
     handle: Pipeline,
     name: []const u8,
@@ -188,7 +241,6 @@ fn pipelinePushConstant(
     _ = .{ local_offset, local_size };
     const cmd = getDrawCommandCmd(.graphics);
     if (cmd == .null_handle) return;
-    errdefer forceEndRendering();
 
     const pipeline: *VKPipeline = .get(handle);
 
@@ -240,19 +292,18 @@ fn destroyShaderModule(handle: ShaderModule) void {
 }
 fn loadBuffer(handle: Buffer, bytes: []const u8, offset: usize) Error!void {
     const mapped = try mapBuffer(handle, bytes.len, offset);
-    @memcpy(mapped, bytes);
+    @memcpy(mapped, bytes[0..@min(bytes.len, mapped.len)]);
     defer unmapBuffer(handle);
 }
 fn mapBuffer(handle: Buffer, bytes: usize, offset: usize) Error![]u8 {
     const buffer: *VKBuffer = .get(handle);
     if (buffer.mapped) return Error.MemoryRemap;
 
-    if (bytes > buffer.size) return Error.OutOfMemory;
     const ptr = (device.mapMemory(accessMemory(buffer.device_memory), offset, @intCast(bytes), .{}) catch
         return Error.OutOfMemory) orelse
         return Error.OutOfMemory;
     buffer.mapped = true;
-    return @as([*]u8, @ptrCast(ptr))[0..bytes];
+    return @as([*]u8, @ptrCast(ptr))[0..@min(bytes, buffer.size)];
 }
 fn unmapBuffer(handle: Buffer) void {
     const buffer: *VKBuffer = .get(handle);
@@ -335,8 +386,12 @@ fn createTexture(size: math.uvec3, format: Format, params: gpu.TextureParams) Er
 fn destroyTexture(handle: Texture) void {
     VKTexture.get(handle).destroy();
 }
-fn createBuffer(size: usize, usage: BufferUsage) Error!Buffer {
-    const buffer = try VKBuffer.create(@intCast(size), usage);
+fn getBufferUsage(self: Buffer) gpu.BufferUsage {
+    return VKBuffer.get(self).usage;
+}
+
+fn createBuffer(size: usize, buf_usage: BufferUsage) Error!Buffer {
+    const buffer = try VKBuffer.create(@intCast(size), buf_usage);
     const handle: Buffer = @enumFromInt(@as(gpu.Handle, @intCast(buffer_list.items.len)));
     try buffer_list.append(arena.allocator(), buffer);
     return handle;
@@ -440,13 +495,23 @@ const VKPipeline = struct {
     vk_handle: vk.Pipeline = .null_handle,
     layout: vk.PipelineLayout = .null_handle,
 
+    descriptor_set_layout: vk.DescriptorSetLayout = .null_handle,
+    descriptor_set: vk.DescriptorSet = .null_handle,
+
     stage_count: u32 = 0,
     shader_modules: [Pipeline.max_pipeline_stages]ShaderModule = undefined,
     entry_point_info_storage: [Pipeline.max_pipeline_stages]hgsl.EntryPointInfo = undefined,
     push_constant_ranges: [Pipeline.max_pipeline_stages]vk.PushConstantRange = undefined,
     push_constant_range_count: u32 = 0,
+
     params: gpu.PipelineParams = .{},
 
+    pub fn bind(self: *VKPipeline, cmd: vk.CommandBuffer, bind_point: vk.PipelineBindPoint) void {
+        // vk.DescriptorSetAllocateInfo
+        // if (descriptor_set != .null_handle)
+        device.cmdBindDescriptorSets(cmd, bind_point, self.layout, 0, 1, &.{self.descriptor_set}, 0, null);
+        device.cmdBindPipeline(cmd, bind_point, self.vk_handle);
+    }
     pub fn recreate(self: *VKPipeline) Error!void {
         const sms = self.shader_modules[0..self.stage_count];
         for (sms) |sm| VKShaderModule.get(sm).recreate();
@@ -455,17 +520,22 @@ const VKPipeline = struct {
                 break false;
         } else true) return;
         const new = create(sms, self.params) catch return;
+        device.destroyDescriptorSetLayout(self.descriptor_set_layout, vka);
+        device.freeDescriptorSets(descriptor_pools[0], 1, &.{self.descriptor_set}) catch {};
+
         device.destroyPipelineLayout(self.layout, vka);
         device.destroyPipeline(self.vk_handle, vka);
         self.* = new;
     }
-    //descriptor_set
     pub fn create(stage_modules: []const ShaderModule, params: gpu.PipelineParams) Error!VKPipeline {
         var pipeline: VKPipeline = .{ .params = params };
         @memcpy(pipeline.shader_modules[0..stage_modules.len], stage_modules);
 
         const mps = gpu.Pipeline.max_pipeline_stages;
         var stage_create_infos: [mps]vk.PipelineShaderStageCreateInfo = undefined;
+
+        var bindings: List(vk.DescriptorSetLayoutBinding) = .empty;
+        defer bindings.deinit(arena.allocator());
 
         for (0..stage_modules.len) |i| {
             const shader_module: *VKShaderModule = .get(stage_modules[i]);
@@ -479,6 +549,23 @@ const VKPipeline = struct {
                     if (!im.type.eql(@"type")) return Error.PipelineStageIOMismatch;
                 }
             }
+            for (ep_info.opaque_uniform_mappings) |oum| {
+                const descriptor_type: vk.DescriptorType = getDescriptorType(oum.type);
+                for (bindings.items) |*b| {
+                    if (b.binding == oum.binding) {
+                        if (b.descriptor_type != descriptor_type)
+                            return Error.PipelineDescriptorCollision;
+                        b.stage_flags = b.stage_flags.merge(getStageFlags(ep_info.stage_info));
+                        break;
+                    }
+                } else try bindings.append(arena.allocator(), .{
+                    .binding = oum.binding,
+                    .descriptor_type = descriptor_type,
+                    .descriptor_count = 1,
+                    .stage_flags = getStageFlags(ep_info.stage_info),
+                });
+            }
+
             const stage_flags = getStageFlags(ep_info.stage_info);
             stage_create_infos[i] = .{
                 .module = shader_module.vk_handle,
@@ -504,9 +591,20 @@ const VKPipeline = struct {
         const fragment: ?FragmentStageInfo = FragmentStageInfo.fromStageSlice(stage_modules);
         const vertex: ?VertexStageInfo = VertexStageInfo.fromStageSlice(stage_modules);
 
+        pipeline.descriptor_set_layout = device.createDescriptorSetLayout(&.{
+            .binding_count = @intCast(bindings.items.len),
+            .p_bindings = bindings.items.ptr,
+        }, vka) catch return Error.ResourceCreationError;
+        device.allocateDescriptorSets(&.{
+            .descriptor_pool = descriptor_pools[0],
+            .descriptor_set_count = 1,
+            .p_set_layouts = &.{pipeline.descriptor_set_layout},
+        }, @ptrCast(&pipeline.descriptor_set)) catch
+            return Error.ResourceCreationError;
+
         const layout = device.createPipelineLayout(&.{
-            // set_layout_count: u32 = 0,
-            // p_set_layouts: ?[*]const DescriptorSetLayout = null,
+            .set_layout_count = 1,
+            .p_set_layouts = &.{pipeline.descriptor_set_layout},
             .push_constant_range_count = pipeline.push_constant_range_count,
             .p_push_constant_ranges = &pipeline.push_constant_ranges,
         }, vka) catch return Error.ResourceCreationError;
@@ -1115,7 +1213,8 @@ const VKWindowContext = struct {
         return @max(@max(self.image_count, 1) - 1, 1);
     }
     pub fn beginRenderingToWindow(self: *VKWindowContext, clear_value: ClearValue) Error!void {
-        self.fif_index = (self.fif_index + 1) % self.fif();
+        //INCREMENT FIF INDEX
+        // self.fif_index = (self.fif_index + 1) % self.fif();
 
         if (~self.acquired_image_index != 0) return;
 
@@ -1505,6 +1604,18 @@ pub fn initBackend() VKError!gpu.Backend {
     api_version = if (physical_device_api_version.@">="(instance_api_version)) instance_api_version else physical_device_api_version;
     try initLogicalDeviceAndQueues(device_extension_list.items);
 
+    descriptor_pools[0] = device.createDescriptorPool(&.{
+        .flags = .{
+            .free_descriptor_set_bit = huge.zigbuiltin.mode == .Debug,
+        },
+        .max_sets = 100,
+        .pool_size_count = 1,
+        .p_pool_sizes = &.{.{
+            .type = .uniform_buffer,
+            .descriptor_count = 10,
+        }},
+    }, vka) catch return VKError.ResourceCreationError;
+
     shader_compiler = .new(null, null, .{
         .target_env = .vulkan1_4,
         .max_push_constant_buffer_size = max_push_constant_bytes,
@@ -1547,8 +1658,11 @@ fn deinit() void {
     window_context_list.items = &.{};
     window_context_primary.destroy(null);
 
-    device.destroyDevice(vka);
-    instance.destroyInstance(vka);
+    for (&descriptor_pools) |dp| if (dp != .null_handle)
+        device.destroyDescriptorPool(dp, vka);
+
+    // device.destroyDevice(vka);
+    // instance.destroyInstance(vka);
 }
 fn initLogicalDeviceAndQueues(extensions: []const [*:0]const u8) VKError!void {
     var queue_create_infos: [queue_type_count]vk.DeviceQueueCreateInfo = undefined;
@@ -1927,6 +2041,13 @@ pub const minimal_required_queue_family_config: QueueConfiguration = .{
 pub const QueueType = enum(u8) { graphics, presentation, compute, transfer, sparse_binding, protected, video_decode, video_encode };
 
 //=======================
+fn getDescriptorType(opaque_type: gpu.OpaqueType) vk.DescriptorType {
+    return switch (opaque_type) {
+        .ssbo => .storage_buffer,
+        .ubo => .uniform_buffer,
+        else => .sampler,
+    };
+}
 fn getStageFlags(stage_info: hgsl.StageInfo) vk.ShaderStageFlags {
     return .{
         .vertex_bit = stage_info == .vertex,
@@ -2075,6 +2196,8 @@ const VKError = error{
     MissingQueueType,
 
     LogicalDeviceInitializationFailure,
+
+    ResourceCreationError,
 };
 fn versionBackend(version: Version) gpu.Backend {
     return .{
@@ -2085,11 +2208,13 @@ fn versionBackend(version: Version) gpu.Backend {
         .draw = &draw,
         .bindVertexBuffer = &bindVertexBuffer,
         .bindIndexBuffer = &bindIndexBuffer,
+        .pipelinePushConstant = &pipelinePushConstant,
+        .pipelineSetOpaqueUniform = &pipelineSetOpaqueUniform,
+
         .beginRendering = &beginRendering,
         .endRendering = &endRendering,
 
         .reloadPipelines = &reloadPipelines,
-        .pipelinePushConstant = pipelinePushConstant,
         .createPipeline = &createPipeline,
         .createShaderModulePath = &createShaderModulePath,
         .destroyShaderModule = &destroyShaderModule,
@@ -2105,6 +2230,7 @@ fn versionBackend(version: Version) gpu.Backend {
         .createTexture = &createTexture,
         .destroyTexture = &destroyTexture,
 
+        .getBufferUsage = &getBufferUsage,
         .loadBuffer = &loadBuffer,
         .mapBuffer = &mapBuffer,
         .unmapBuffer = &unmapBuffer,

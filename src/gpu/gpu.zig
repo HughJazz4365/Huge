@@ -103,7 +103,11 @@ pub const Pipeline = enum(u32) {
         switch (T) {
             huge.Transform => backend.pipelinePushConstant(self, name, 0, 0, &ptr.modelMat()),
             huge.Camera => backend.pipelinePushConstant(self, name, 0, 0, &ptr.viewProjectionMat()),
-            Buffer => backend.setPipelineOpaqueUniform(self, name, 0, 0, .buffer, @intFromEnum(value)),
+            Buffer => backend.pipelineSetOpaqueUniform(self, name, 0, 0, switch (ptr.usage()) {
+                .uniform => .ubo,
+                .storage => .ssbo,
+                else => return,
+            }, @intFromEnum(value)),
             else => backend.pipelinePushConstant(self, name, 0, 0, ptr),
         }
     }
@@ -238,6 +242,9 @@ pub const RenderTarget = enum(Handle) {
 
 pub const Buffer = enum(Handle) {
     _,
+    pub fn usage(self: Buffer) BufferUsage {
+        return backend.getBufferUsage(self);
+    }
     pub fn loadSlice(self: Buffer, T: type, slice: []const T, offset: usize) Error!void {
         try self.loadBytes(@ptrCast(@alignCast(slice)), offset);
     }
@@ -252,8 +259,8 @@ pub const Buffer = enum(Handle) {
     }
     pub const bindVertex = bindVertexBuffer;
     pub const bindIndex = bindIndexBuffer;
-    pub fn create(size: usize, usage: BufferUsage) Error!Buffer {
-        return try backend.createBuffer(size, usage);
+    pub fn create(size: usize, buf_usage: BufferUsage) Error!Buffer {
+        return try backend.createBuffer(size, buf_usage);
     }
     pub fn destroy(self: Buffer) void {
         backend.destroyBuffer(self);
@@ -393,6 +400,7 @@ pub const Error = error{
     ShaderEntryPointNotFound,
     ShaderPushConstantOutOfBounds,
     PipelineStageIOMismatch,
+    PipelineDescriptorCollision,
 
     NonMatchingRenderTargetAttachmentSizes,
     NonMatchingRenderAttachmentParams,
