@@ -56,6 +56,7 @@ createWindowContext: *const CreateWindowContextFn = undefined,
 destroyWindowContext: *const DestroyWindowContextFn = undefined,
 
 pub const DrawFn = fn (Pipeline, gpu.DrawParams) void;
+pub const UpdateBufferFn = fn (Buffer, []const u8, usize) void;
 pub const BindVertexBufferFn = fn (Buffer) void;
 pub const BindIndexBufferFn = fn (Buffer, gpu.IndexType) void;
 pub const PipelinePushConstantFn = fn (Pipeline, []const u8, u32, u32, *const anyopaque) void;

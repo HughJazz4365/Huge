@@ -7,9 +7,18 @@ pub const Backend = @import("GpuBackend.zig");
 
 var backend: Backend = undefined; //default to software renderer??
 
+//2x2 image: |purple| green|
+//           |red   | blue |
+pub const default_image = [_]u8{
+    156, 39,  176, 255,
+    0,   244, 92,  255,
+    255, 0,   0,   255,
+    3,   81,  244, 255,
+};
+
 //=======|methods|=======
 
-//draw commands
+//draw commands(can ideally be calls from a separate threaad?)
 pub fn draw(pipeline: Pipeline, params: DrawParams) void {
     backend.draw(pipeline, params);
 }
@@ -40,8 +49,8 @@ pub fn destroyWindowContext(window_context: WindowContext) void {
     backend.destroyWindowContext(window_context);
 }
 pub fn reloadPipelines() Error!void {
-    // if (huge.zigbuiltin.mode == .Debug)
-    try backend.reloadPipelines();
+    if (huge.zigbuiltin.mode == .Debug)
+        try backend.reloadPipelines();
 }
 pub inline fn coordinateSystem() math.CoordinateSystem {
     return backend.coordinate_system;
@@ -242,9 +251,6 @@ pub const RenderTarget = enum(Handle) {
 
 pub const Buffer = enum(Handle) {
     _,
-    pub fn usage(self: Buffer) BufferUsage {
-        return backend.getBufferUsage(self);
-    }
     pub fn loadSlice(self: Buffer, T: type, slice: []const T, offset: usize) Error!void {
         try self.loadBytes(@ptrCast(@alignCast(slice)), offset);
     }
@@ -257,6 +263,9 @@ pub const Buffer = enum(Handle) {
     pub fn unmap(self: Buffer) void {
         backend.unmapBuffer(self);
     }
+    pub fn usage(self: Buffer) BufferUsage {
+        return backend.getBufferUsage(self);
+    }
     pub const bindVertex = bindVertexBuffer;
     pub const bindIndex = bindIndexBuffer;
     pub fn create(size: usize, buf_usage: BufferUsage) Error!Buffer {
@@ -267,7 +276,7 @@ pub const Buffer = enum(Handle) {
     }
 };
 pub const IndexType = enum { u32, u16, u8 };
-pub const BufferUsage = enum { uniform, vertex, index, storage };
+pub const BufferUsage = enum { uniform, vertex, index, storage, transfer };
 pub const Texture = enum(Handle) {
     _,
     pub fn texType(self: Texture) TextureType {

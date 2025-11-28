@@ -15,6 +15,7 @@ context: huge.gpu.WindowContext = undefined,
 current_input_mask: [input_mask_len]usize = @splat(0),
 last_input_mask: [input_mask_len]usize = @splat(0),
 
+cursor_pos: math.vec2 = @splat(0),
 last_cursor_pos: math.vec2 = @splat(0),
 
 frame_count: u64 = 0,
@@ -29,8 +30,10 @@ pub fn tick(self: *Window) bool {
     const should = self.shouldClose();
     if (should) return false;
     self.frame_count += 1;
-    self.last_cursor_pos = self.getCursorPos();
     pollEvents();
+    self.last_cursor_pos = self.cursor_pos;
+    self.cursor_pos = self.getCursorPosRaw();
+
     huge.time.tick();
     self.querryInput();
     return true;
@@ -39,27 +42,30 @@ pub fn tick(self: *Window) bool {
 pub fn disableCursor(self: *const Window) void {
     glfw.setInputMode(self.handle, glfw.Cursor, glfw.CursorDisabled);
 }
-pub fn getCursorDelta(self: *const Window) math.vec2 {
+pub fn getCursorDeltaNormalized(self: *const Window) math.vec2 {
     const aspect = self.aspectRatio();
-    return (self.getCursorPos() - self.last_cursor_pos) *
-        math.scale(math.vec2{ aspect, -1 }, huge.time.delta());
+    const factor = math.vec2{ aspect, -1 } / @as(math.vec2, @floatFromInt(self.size()));
+    return (self.cursor_pos - self.last_cursor_pos) *
+        math.scale(factor, huge.time.delta());
 }
 
-pub fn getCursorPos(self: *const Window) math.vec2 {
+fn getCursorPosRaw(self: *const Window) math.vec2 {
     var pos: [2]f64 = @splat(0);
     glfw.getCursorPos(self.handle, &pos[0], &pos[1]);
     return .{ @floatCast(pos[0]), @floatCast(pos[1]) };
 }
 // test 3d movement input (wasd - wars)
-pub fn warsudVector(self: *const Window) math.vec3 {
-    return .{
+pub fn warsudVector(self: *const Window, yrot: f32) math.vec3 {
+    const topdown: math.vec3 = .{
         util.f32fromBool(self.getKey(.s, .hold)) -
             util.f32fromBool(self.getKey(.a, .hold)),
-        util.f32fromBool(self.getKey(.space, .hold)) -
-            util.f32fromBool(self.getKey(.leftShift, .hold)),
+        0,
         util.f32fromBool(self.getKey(.w, .hold)) -
             util.f32fromBool(self.getKey(.r, .hold)),
     };
+    return math.rotateVector(topdown, math.quatFromAxisAngle(math.up(math.vec3), yrot)) +
+        math.vec3{ 0, util.f32fromBool(self.getKey(.space, .hold)) -
+            util.f32fromBool(self.getKey(.leftShift, .hold)), 0 };
 }
 
 pub fn getKey(self: *const Window, key: Key, action: KeyAction) bool {

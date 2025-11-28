@@ -1,11 +1,7 @@
 // io must only be scalar or vector!!(arrays??)
 
-// 1. uniform buffer
-// 2. hgsl texture
-
-// + descriptor sets, opaque uniforms
+// 1. hgsl texture
 // + obj, png loading
-// + camera movement
 
 const std = @import("std");
 const huge = @import("huge");
@@ -41,20 +37,14 @@ pub fn main() !void {
     };
 
     const ubo: gpu.Buffer = try .create(12, .uniform);
-    // const texture: gpu.Texture = try .create(.{ 2, 2, 0 }, .rgba8_norm, .{});
-    // _ = try texture.renderTarget();
-    _ = try gpu.RenderTarget.create(.{ 1920, 1080 }, .r8_norm, .depth16, .{});
-    // std.debug.print("th: {}\n", .{texture});
-    // const rt = try texture.renderTarget();
-    // const rt = try gpu.RenderTarget.create(.{ 2, 2 }, .rgba8_norm, .depth16, .{});
+    const texture: gpu.Texture = try .create(.{ 2, 2, 0 }, .rgba8_norm, .{ .filtering = .{ .shrink = .linear, .expand = .linear } });
+    _ = texture;
 
     var avg: f64 = 0;
     // if (true) return;
     window.disableCursor();
+    var euler: math.vec3 = @splat(0);
     while (window.tick()) {
-        cube_transform.position += math.vectorCast(math.vec3, window.getCursorDelta());
-        // const cpos = window.getCursorDelta();
-        // std.debug.print("cpos: {d}\n", .{cpos});
         if (window.frame_count % 200 == 0) try gpu.reloadPipelines();
         if (huge.time.avg64() != avg) {
             avg = huge.time.avg64();
@@ -62,10 +52,20 @@ pub fn main() !void {
         }
 
         const speed = 5;
-        cube_transform.rotation = math.quatFromEuler(.{ 0, huge.time.seconds(), 0 });
-        camera_transform.position += math.scale(window.warsudVector(), huge.time.delta() * speed);
+        const sensitivity = 1000;
 
+        const cursor_delta = window.getCursorDeltaNormalized();
+        const limit = math.r2d * (90 - 0.001);
+        euler = .{
+            std.math.clamp(euler[0] + -cursor_delta[1] * sensitivity, -limit, limit),
+            euler[1] + cursor_delta[0] * sensitivity,
+            0,
+        };
+        camera_transform.rotation = math.quatFromEuler(euler);
+        camera_transform.position += math.scale(window.warsudVector(euler[1]), huge.time.delta() * speed);
         try ubo.loadBytes(@ptrCast(@alignCast(&camera_transform.position)), 0);
+
+        cube_transform.rotation = math.quatFromEuler(.{ 0, huge.time.seconds(), 0 });
 
         try gpu.beginRendering(window.renderTarget(), .{ .color = @splat(0.14) });
         pipeline.setPropertiesStruct(.{

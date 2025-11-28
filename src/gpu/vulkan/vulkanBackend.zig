@@ -11,14 +11,6 @@ const frmt = @import("format.zig");
 pub const vk = @import("vk.zig");
 
 //=====|constants|======
-//2x2 image: |purple| green|
-//           |red   | blue |
-const default_image = [_]u8{
-    156, 39,  176, 255,
-    0,   244, 92,  255,
-    255, 0,   0,   255,
-    3,   81,  244, 255,
-};
 
 const u32m = ~@as(u32, 0);
 const timeout: u64 = std.time.ns_per_s * 5;
@@ -89,6 +81,19 @@ const MemoryAllocation = struct {
 var descriptor_pools: [10]vk.DescriptorPool = @splat(.null_handle);
 //======|methods|========
 
+fn updateBuffer(handle: Buffer, bytes: []const u8, offset: usize) void {
+    const cmd = getDrawCommandCmd(.graphics);
+    if (cmd == .null_handle) return;
+
+    const buffer = VKBuffer.get(handle);
+    device.cmdUpdateBuffer(
+        cmd,
+        buffer.vk_handle,
+        offset,
+        @min(bytes.len, buffer.size - @as(u64, @intCast(offset))),
+        bytes.ptr,
+    );
+}
 fn draw(handle: Pipeline, params: gpu.DrawParams) void {
     const cmd = getDrawCommandCmd(.graphics);
     if (cmd == .null_handle) return;
@@ -391,10 +396,7 @@ fn getBufferUsage(self: Buffer) gpu.BufferUsage {
 }
 
 fn createBuffer(size: usize, buf_usage: BufferUsage) Error!Buffer {
-    const buffer = try VKBuffer.create(@intCast(size), buf_usage);
-    const handle: Buffer = @enumFromInt(@as(gpu.Handle, @intCast(buffer_list.items.len)));
-    try buffer_list.append(arena.allocator(), buffer);
-    return handle;
+    return try (try VKBuffer.create(@intCast(size), buf_usage)).append();
 }
 fn destroyBuffer(handle: Buffer) void {
     VKBuffer.get(handle).destroy();
@@ -790,9 +792,22 @@ const VKTexture = struct {
     capabilities: Capabilites = .{},
     vk_format: vk.Format = .undefined,
 
+    staging_buffer: ?Buffer = null,
+
     const max_textures_per_allocation = 16;
     const mt = max_textures_per_allocation;
 
+    pub fn loadBytes(self: *VKTexture) Error!void {
+        try recreateIfNeeded(@ptrCast(self), .{ .transfer = true });
+        if (self.staging_buffer == null) {
+            const size = @reduce(.Add, self.size) * frmt.formatSize(self.vk_format);
+            self.staging_buffer = try (try VKBuffer.create(size, .storage)).append();
+        }
+        std.debug.print("STAGINGBUFFER: {}\n", .{self.staging_buffer});
+    }
+    pub fn createStagingBuffer(self: *VKTexture) Buffer {
+        _ = self;
+    }
     pub fn recreateIfNeeded(
         textures: []VKTexture,
         capabilities: []const Capabilites,
@@ -1008,6 +1023,10 @@ const VKTexture = struct {
         self.view = .null_handle;
         device.destroySampler(self.sampler, vka);
         self.sampler = .null_handle;
+        if (self.staging_buffer) |sb|
+            VKBuffer.get(sb).destroy();
+        self.staging_buffer = null;
+        self.sampler = .null_handle;
         if (~self.memory != 0)
             removeMemoryReference(self.memory);
         self.memory = ~@as(u32, 0);
@@ -1054,11 +1073,12 @@ const VKBuffer = struct {
 
         const handle = device.createBuffer(&.{
             .size = size,
-            .usage = switch (usage) {
-                .vertex => .{ .vertex_buffer_bit = true },
-                .index => .{ .index_buffer_bit = true },
-                .uniform => .{ .uniform_buffer_bit = true },
-                else => .{},
+            .usage = .{
+                .vertex_buffer_bit = usage == .vertex,
+                .index_buffer_bit = usage == .index,
+                .uniform_buffer_bit = usage == .uniform,
+                .transfer_src_bit = true,
+                .transfer_dst_bit = true,
             },
             .sharing_mode = .exclusive,
             // .p_queue_family_indices = &.{},
@@ -1084,6 +1104,11 @@ const VKBuffer = struct {
     }
     pub fn get(handle: Buffer) *VKBuffer {
         return &buffer_list.items[@intFromEnum(handle)];
+    }
+    pub fn append(buffer: VKBuffer) Error!Buffer {
+        const handle: Buffer = @enumFromInt(@as(gpu.Handle, @intCast(buffer_list.items.len)));
+        try buffer_list.append(arena.allocator(), buffer);
+        return handle;
     }
 };
 
@@ -1152,7 +1177,7 @@ const VKRenderTarget = struct {
         if (color_format) |f| tex_create_params[util.ipp(&i)].format = f;
         if (depth_stencil_format) |f| tex_create_params[util.ipp(&i)].format = f;
         var textures: [2]VKTexture = undefined;
-        try VKTexture.createSlice(&textures, tex_create_params[0..i]);
+        try VKTexture.createSlice(textures[0..i], tex_create_params[0..i]);
 
         if (color_format) |_| result.color_attachment = try textures[0].append();
         if (depth_stencil_format) |_| result.depth_stencil_attachment = try textures[i - 1].append();

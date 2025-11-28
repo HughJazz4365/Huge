@@ -19,14 +19,14 @@ const frag = entrypoint(.fragment){
 	//ubo start
 	const light_dir = |vec3{3, -9, 1}
 	const ambient = 0.15
-	const spec_pow = 20
-	const spec_intensity = 1
+	const spec_pow = 30
+	const spec_intensity = 2
 	//ubo end
 
 	const view_dir = |(ubo.eye_pos - world_pos)
 	const diffuse = -light_dir *** normal
 
-	const specular = (@reflect(-light_dir, normal) *** view_dir) ^ spec_pow * spec_intensity
+	const specular = (@reflect(-light_dir, normal) *** view_dir) ^ spec_pow * spec_intensity  * diffuse
 
 	//out o: vec4 = .{albedo * .{ specular}, 1}
 	out o: vec4 = .{albedo * .{diffuse + ambient + specular}, 1}
