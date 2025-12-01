@@ -5,7 +5,8 @@ const math = huge.math;
 pub const hgsl = @import("hgsl");
 pub const Backend = @import("GpuBackend.zig");
 
-var backend: Backend = undefined; //default to software renderer??
+pub const b = @import("vulkan/vulkanBackend.zig");
+// var backend: Backend = undefined; //default to software renderer??
 
 //2x2 image: |purple| green|
 //           |red   | blue |
@@ -20,56 +21,59 @@ pub const default_image = [_]u8{
 
 //draw commands(can ideally be calls from a separate threaad?)
 pub fn draw(pipeline: Pipeline, params: DrawParams) void {
-    backend.draw(pipeline, params);
+    b.draw(pipeline, params);
 }
 pub fn clear(value: ClearValue) void {
-    backend.clear(value);
+    b.clear(value);
 }
 pub fn bindVertexBuffer(buffer: Buffer) void {
-    backend.bindVertexBuffer(buffer);
+    b.bindVertexBuffer(buffer);
 }
 pub fn bindIndexBuffer(buffer: Buffer, index_type: IndexType) void {
-    backend.bindIndexBuffer(buffer, index_type);
+    b.bindIndexBuffer(buffer, index_type);
 }
 //draw control flow
 pub fn beginRendering(render_target: RenderTarget, clear_value: ClearValue) Error!void {
-    try backend.beginRendering(render_target, clear_value);
+    try b.beginRendering(render_target, clear_value);
 }
 pub fn endRendering() Error!void {
-    try backend.endRendering();
+    try b.endRendering();
 }
 //resource/state management
 pub fn getWindowRenderTarget(window: huge.Window) RenderTarget {
-    return backend.getWindowRenderTarget(window);
+    return b.getWindowRenderTarget(window);
 }
 pub fn createWindowContext(window: huge.Window) Error!WindowContext {
-    return try backend.createWindowContext(window);
+    return try b.createWindowContext(window);
 }
 pub fn destroyWindowContext(window_context: WindowContext) void {
-    backend.destroyWindowContext(window_context);
+    b.destroyWindowContext(window_context);
 }
 pub fn reloadPipelines() Error!void {
     if (huge.zigbuiltin.mode == .Debug)
-        try backend.reloadPipelines();
+        try b.reloadPipelines();
 }
 pub inline fn coordinateSystem() math.CoordinateSystem {
-    return backend.coordinate_system;
+    return .right_handed;
+    // return backend.coordinate_system;
 }
 pub inline fn api() GApi {
-    return backend.api;
+    return .vulkan;
+    // return backend.api;
 }
 pub inline fn apiVersion() huge.Version {
-    return backend.api_version;
+    return .{ .major = 1, .minor = 4 };
+    // return backend.api_version;
 }
 
 //====|initialization|===
 
 pub fn init() Error!void {
-    backend = @import("vulkan/vulkanBackend.zig").initBackend() catch
+    _ = @import("vulkan/vulkanBackend.zig").initBackend() catch
         return Error.BackendInitializationFailure;
 }
 pub fn deinit() void {
-    backend.deinit();
+    b.deinit();
 }
 
 //=======================
@@ -110,14 +114,11 @@ pub const Pipeline = enum(u32) {
         const T = if (@typeInfo(@TypeOf(value)) == .pointer) @typeInfo(@TypeOf(value)).pointer.child else @TypeOf(value);
         const ptr: *const T = if (@typeInfo(@TypeOf(value)) == .pointer) value else &value;
         switch (T) {
-            huge.Transform => backend.pipelinePushConstant(self, name, 0, 0, &ptr.modelMat()),
-            huge.Camera => backend.pipelinePushConstant(self, name, 0, 0, &ptr.viewProjectionMat()),
-            Buffer => backend.pipelineSetOpaqueUniform(self, name, 0, 0, switch (ptr.usage()) {
-                .uniform => .ubo,
-                .storage => .ssbo,
-                else => return,
-            }, @intFromEnum(value)),
-            else => backend.pipelinePushConstant(self, name, 0, 0, ptr),
+            huge.Transform => b.pipelinePushConstant(self, name, 0, 0, &ptr.modelMat()),
+            huge.Camera => b.pipelinePushConstant(self, name, 0, 0, &ptr.viewProjectionMat()),
+            Buffer => b.pipelineSetOpaqueUniform(self, name, 0, 0, .buffer, @intFromEnum(value)),
+            Texture => b.pipelineSetOpaqueUniform(self, name, 0, 0, .texture, @intFromEnum(value)),
+            else => b.pipelinePushConstant(self, name, 0, 0, ptr),
         }
     }
     pub fn createPath(pipeline_source: PipelineSourcePath, params: PipelineParams) Error!Pipeline {
@@ -126,10 +127,10 @@ pub const Pipeline = enum(u32) {
         while (pipeline_source.next(index)) |ps| {
             if (index + 1 >= max_pipeline_stages) return Error.ResourceCreationError;
             shader_modules[index] =
-                try backend.createShaderModulePath(ps.path, ps.entry_point);
+                try b.createShaderModulePath(ps.path, ps.entry_point);
             index += 1;
         }
-        return try backend.createPipeline(shader_modules[0..index], params);
+        return try b.createPipeline(shader_modules[0..index], params);
     }
 };
 pub const PipelineParams = struct {
@@ -199,7 +200,7 @@ pub const ShaderSourcePath = struct {
     }
 };
 
-pub const OpaqueType = hgsl.OpaqueType;
+pub const OpaqueType = enum { buffer, texture };
 pub const Feature = enum {
     geometry_shaders,
     tessellation_shaders,
@@ -215,7 +216,7 @@ pub const FeatureSet = huge.util.StructFromEnum(Feature, bool, false, .@"packed"
 pub const RenderTarget = enum(Handle) {
     _,
     pub fn size(self: RenderTarget) math.uvec2 {
-        return backend.renderTargetSize(self);
+        return b.renderTargetSize(self);
     }
     // pub fn colorAttachment(self: RenderTarget) ?Texture
     // pub fn depthStencilAttachment(self: RenderTarget) ?Texture
@@ -235,17 +236,17 @@ pub const RenderTarget = enum(Handle) {
             if (ds.texType() != .@"2d") return Error.WrongTextureType;
         }
 
-        return try backend.createRenderTargetFromTextures(color, depth_stencil);
+        return try b.createRenderTargetFromTextures(color, depth_stencil);
     }
-    pub fn create(tex_size: math.uvec2, color_format: ?Format, depth_stencil_format: ?Format, params: TextureParams) Error!RenderTarget {
+    pub fn create(tex_size: math.uvec2, color_format: ?Format, depth_stencil_format: ?Format, sampling_options: ?SamplingOptions) Error!RenderTarget {
         if (color_format != null and color_format.?.isDepthStencil())
             return Error.WrongFormat;
         if (depth_stencil_format != null and !depth_stencil_format.?.isDepthStencil())
             return Error.WrongFormat;
-        return try backend.createRenderTarget(tex_size, color_format, depth_stencil_format, params);
+        return try b.createRenderTarget(tex_size, color_format, depth_stencil_format, sampling_options);
     }
     pub fn destroy(self: RenderTarget) void {
-        backend.destroyRenderTarget(self);
+        b.destroyRenderTarget(self);
     }
 };
 
@@ -255,52 +256,81 @@ pub const Buffer = enum(Handle) {
         try self.loadBytes(@ptrCast(@alignCast(slice)), offset);
     }
     pub fn loadBytes(self: Buffer, bytes: []const u8, offset: usize) Error!void {
-        try backend.loadBuffer(self, bytes, offset);
+        try b.loadBuffer(self, bytes, offset);
     }
     pub fn map(self: Buffer, bytes: usize, offset: usize) Error![]u8 {
-        return try backend.mapBuffer(self, bytes, offset);
+        return try b.mapBuffer(self, bytes, offset);
     }
     pub fn unmap(self: Buffer) void {
-        backend.unmapBuffer(self);
+        b.unmapBuffer(self);
     }
     pub fn usage(self: Buffer) BufferUsage {
-        return backend.getBufferUsage(self);
+        return b.getBufferUsage(self);
     }
     pub const bindVertex = bindVertexBuffer;
     pub const bindIndex = bindIndexBuffer;
     pub fn create(size: usize, buf_usage: BufferUsage) Error!Buffer {
-        return try backend.createBuffer(size, buf_usage);
+        return try b.createBuffer(size, buf_usage);
     }
     pub fn destroy(self: Buffer) void {
-        backend.destroyBuffer(self);
+        b.destroyBuffer(self);
     }
 };
 pub const IndexType = enum { u32, u16, u8 };
 pub const BufferUsage = enum { uniform, vertex, index, storage, transfer };
 pub const Texture = enum(Handle) {
     _,
-    pub fn texType(self: Texture) TextureType {
-        return backend.getTextureType(self);
-    }
-    pub fn size(self: Texture) math.uvec3 {
-        return backend.getTextureSize(self);
+    pub fn dimensions(self: Texture) TextureDimensions {
+        return b.getTextureDimensions(self);
     }
     pub fn format(self: Texture) Format {
-        return backend.getTextureFormat(self);
+        return b.getTextureFormat(self);
     }
     pub fn renderTarget(self: Texture) Error!RenderTarget {
-        return try backend.createRenderTargetFromTextures(
+        return try b.createRenderTargetFromTextures(
             if (self.format().isDepthStencil()) null else self,
             if (!self.format().isDepthStencil()) null else self,
         );
     }
-    pub fn create(tex_size: math.uvec3, tex_format: Format, params: TextureParams) Error!Texture {
-        return try backend.createTexture(tex_size, tex_format, params);
+    pub fn create(
+        tex_dimensions: TextureDimensions,
+        tex_format: Format,
+        opt: ?SamplingOptions,
+    ) Error!Texture {
+        return try b.createTexture(tex_dimensions, tex_format, opt);
     }
     pub fn destroy(self: Texture) void {
-        backend.destroyTexture(self);
+        b.destroyTexture(self);
     }
 };
+
+pub const TextureDimensions = union(TextureType) {
+    @"1d": u32,
+    @"2d": math.uvec2,
+    @"3d": math.uvec3,
+    cube: math.uvec2,
+    @"1d_array": ArrayDimensionsType(u32),
+    @"2d_array": ArrayDimensionsType(math.uvec2),
+    cube_array: ArrayDimensionsType(math.uvec2),
+    fn ArrayDimensionsType(Size: type) type {
+        return struct { size: Size, array_layers: u32 };
+    }
+    pub fn isCube(self: TextureDimensions) bool {
+        return self == .cube or self == .cube_array;
+    }
+    pub fn size(self: TextureDimensions) math.uvec4 {
+        return switch (self) {
+            .@"1d" => |d| .{ d, 1, 1, 1 },
+            .@"2d" => |d| math.swizzle(d, .xy11),
+            .@"3d" => |d| math.swizzle(d, .xyz1),
+            .cube => |d| math.swizzle(d, .xy11),
+            .@"1d_array" => |d| .{ d.size, 1, 1, d.array_layers },
+            .@"2d_array" => |d| .{ d.size[0], d.size[1], 1, d.array_layers },
+            .cube_array => |d| .{ d.size[0], d.size[1], 1, d.array_layers },
+        };
+    }
+};
+
 pub const TextureType = enum {
     @"1d",
     @"2d",
@@ -310,17 +340,31 @@ pub const TextureType = enum {
     @"2d_array",
     cube_array,
 };
-pub const TextureParams = struct {
-    filtering: SampleFiltering = null,
-    mip_levels: u32 = 1,
-    array_layers: u32 = 1,
-    cubemap: bool = false,
-    // samples: u8,
-};
-pub const SampleFiltering = ?struct {
+pub const SamplingOptions = struct {
     shrink: Filtering = .point,
     expand: Filtering = .point,
+    tiling: Tiling = .clamp_to_border,
+    mip_levels: u32 = 1,
+    // samples: u8,
 };
+pub const CompareOp = struct {
+    .never,
+    .less,
+    .equal,
+    .less_or_equal,
+    .greater,
+    .not_equal,
+    .greater_or_equal,
+    .always,
+};
+pub const Tiling = enum {
+    repeat,
+    mirror,
+    clamp_to_edge,
+    clamp_to_border,
+    mirror_clamp_to_edge,
+};
+
 pub const Filtering = enum { point, linear };
 pub const Format = enum {
     r8,
@@ -387,7 +431,7 @@ pub const ShaderStage = hgsl.Parser.ShaderStage;
 pub const WindowContext = enum(Handle) {
     _,
     pub fn update(self: WindowContext) void {
-        backend.updateWindowContext(self);
+        b.updateWindowContext(self);
     }
 };
 pub const Handle = u32;
@@ -415,7 +459,7 @@ pub const Error = error{
     NonMatchingRenderAttachmentParams,
     WrongFormat,
     WrongTextureType,
-    InvalidImageType,
+    InvalidTextureDimensions,
 
     MemoryRemap,
 

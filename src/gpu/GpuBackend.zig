@@ -35,8 +35,7 @@ createRenderTargetFromTextures: *const createRendrerTargetFromTexturesFn = undef
 createRenderTarget: *const CreateRenderTargetFn = undefined,
 destroyRenderTarget: *const DestroyRenderTargetFn = undefined,
 
-getTextureType: *const GetTextureTypeFn = undefined,
-getTextureSize: *const GetTextureSizeFn = undefined,
+getTextureDimensions: *const GetTextureDimensionsFn = undefined,
 getTextureFormat: *const GetTextureFormatFn = undefined,
 createTexture: *const CreateTextureFn = undefined,
 destroyTexture: *const DestroyTextureFn = undefined,
@@ -75,13 +74,13 @@ pub const DestroyShaderModuleFn = fn (ShaderModule) void;
 
 pub const RenderTargetSizeFn = fn (RenderTarget) math.uvec2;
 pub const createRendrerTargetFromTexturesFn = fn (?Texture, ?Texture) Error!RenderTarget;
-pub const CreateRenderTargetFn = fn (math.uvec2, ?gpu.Format, ?gpu.Format, gpu.TextureParams) Error!RenderTarget;
+pub const CreateRenderTargetFn = fn (math.uvec2, ?gpu.Format, ?gpu.Format, ?gpu.SamplingOptions) Error!RenderTarget;
 pub const DestroyRenderTargetFn = fn (RenderTarget) void;
 
-pub const GetTextureSizeFn = fn (Texture) math.uvec3;
+pub const GetTextureDimensionsFn = fn (Texture) gpu.TextureDimensions;
 pub const GetTextureTypeFn = fn (Texture) gpu.TextureType;
 pub const GetTextureFormatFn = fn (Texture) gpu.Format;
-pub const CreateTextureFn = fn (math.uvec3, gpu.Format, gpu.TextureParams) Error!Texture;
+pub const CreateTextureFn = fn (gpu.TextureDimensions, gpu.Format, ?gpu.SamplingOptions) Error!Texture;
 pub const DestroyTextureFn = fn (Texture) void;
 
 pub const GetBufferUsageFn = fn (Buffer) gpu.BufferUsage;

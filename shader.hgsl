@@ -1,5 +1,6 @@
 uniform ubo : @Buffer(struct{
 	member eye_pos: vec3
+	member inv_res: vec2
 }, .ubo)
 
 const vert = entrypoint(.vertex){
@@ -14,7 +15,9 @@ const vert = entrypoint(.vertex){
 
 const frag = entrypoint(.fragment){
 	in(.flat) normal, in world_pos: vec3
-	const albedo : vec3 = .{1.0, 0.4, 0.1}
+	uniform tex : @Texture(f32, ._2d, true)
+	//const albedo : vec3 = .{1.0, 0.4, 0.1}
+	const albedo = tex.sample(@frag_coord.xy * ubo.inv_res).xyz
 
 	//ubo start
 	const light_dir = |vec3{3, -9, 1}

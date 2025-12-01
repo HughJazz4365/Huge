@@ -37,8 +37,11 @@ pub fn main() !void {
     };
 
     const ubo: gpu.Buffer = try .create(12, .uniform);
-    const texture: gpu.Texture = try .create(.{ 2, 2, 0 }, .rgba8_norm, .{ .filtering = .{ .shrink = .linear, .expand = .linear } });
-    _ = texture;
+    const texture: gpu.Texture = try .create(
+        .{ .@"2d" = .{ 2, 2 } },
+        .rgba8_norm,
+        .{},
+    );
 
     var avg: f64 = 0;
     // if (true) return;
@@ -72,6 +75,7 @@ pub fn main() !void {
             .model = &cube_transform,
             .vp = &camera,
             .ubo = ubo,
+            .tex = texture,
         });
         mesh.draw(pipeline);
 
