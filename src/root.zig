@@ -3,7 +3,8 @@ pub const zigbuiltin = @import("builtin");
 pub const core = @import("core.zig");
 pub const Window = @import("Window.zig");
 pub const math = @import("math.zig");
-pub const gpu = @import("gpu/gpu.zig");
+// pub const gpu = @import("gpu/gpu.zig");
+pub const vk = @import("gpu/vulkan/vulkan.zig");
 pub const rend = @import("gpu/rendering.zig");
 pub const util = @import("util.zig");
 
@@ -25,12 +26,17 @@ pub fn cassert(comptime condition: bool) void {
 }
 pub fn init() !void {
     try Window.init();
-    try gpu.init();
+    try vk.init(std.heap.page_allocator, .{
+        .graphics = true,
+        .presentation = true,
+        .transfer = true,
+        .compute = true,
+    });
     initialized = true;
 }
 pub fn deinit() void {
     defer Window.terminate();
-    defer gpu.deinit();
+    defer vk.deinit();
     initialized = false;
 }
 pub const Version = struct {

@@ -68,10 +68,10 @@ fn FlagFormatMixin(comptime FlagsType: type) type {
     };
 }
 pub const Version = packed struct(u32) {
-    patch: u12,
+    patch: u12 = 0,
     minor: u10,
     major: u7,
-    variant: u3,
+    variant: u3 = 0,
 };
 pub fn makeApiVersion(variant: u3, major: u7, minor: u10, patch: u12) Version {
     return .{ .variant = variant, .major = major, .minor = minor, .patch = patch };

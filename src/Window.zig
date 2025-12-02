@@ -11,7 +11,7 @@ pub const Handle = *glfw.Window;
 handle: Handle = undefined,
 title: [:0]const u8,
 
-context: huge.gpu.WindowContext = undefined,
+context: huge.vk.WindowContext = undefined,
 current_input_mask: [input_mask_len]usize = @splat(0),
 last_input_mask: [input_mask_len]usize = @splat(0),
 
@@ -100,26 +100,24 @@ pub fn size(self: Window) Size {
     glfw.getWindowSize(self.handle, &storage[0], &storage[1]);
     return @intCast(storage);
 }
-pub fn update(self: Window) void {
-    self.context.update();
-}
-pub fn renderTarget(self: Window) huge.gpu.RenderTarget {
-    return huge.gpu.getWindowRenderTarget(self);
-}
+// pub fn renderTarget(self: Window) huge.gpu.RenderTarget {
+//     return huge.gpu.getWindowRenderTarget(self);
+// }
 pub fn shouldClose(self: Window) bool {
     return glfw.windowShouldClose(self.handle);
 }
 pub const pollEvents = glfw.pollEvents;
 
 pub fn create(attributes: Attributes) Error!Window {
-    if (huge.gpu.api() == .opengl) {
-        glfw.windowHint(glfw.ClientAPI, glfw.OpenGLAPI);
-        glfw.windowHint(glfw.ContextVersionMajor, 4);
-        glfw.windowHint(glfw.ContextVersionMinor, 3);
-        glfw.windowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile);
-        glfw.windowHint(glfw.OpenGLForwardCompat, @intFromBool(true));
-        glfw.windowHint(glfw.Doublebuffer, @intFromBool(true));
-    } else glfw.windowHint(glfw.ClientAPI, glfw.NoAPI);
+    // if (huge.gpu.api() == .opengl) {
+    //     glfw.windowHint(glfw.ClientAPI, glfw.OpenGLAPI);
+    //     glfw.windowHint(glfw.ContextVersionMajor, 4);
+    //     glfw.windowHint(glfw.ContextVersionMinor, 3);
+    //     glfw.windowHint(glfw.OpenGLProfile, glfw.OpenGLCoreProfile);
+    //     glfw.windowHint(glfw.OpenGLForwardCompat, @intFromBool(true));
+    //     glfw.windowHint(glfw.Doublebuffer, @intFromBool(true));
+    // } else
+    glfw.windowHint(glfw.ClientAPI, glfw.NoAPI);
 
     var window: Window = .{
         .title = attributes.title,
@@ -131,16 +129,16 @@ pub fn create(attributes: Attributes) Error!Window {
             null,
         ),
     };
-    if (huge.gpu.api() == .opengl) glfw.makeContextCurrent(window.handle);
+    // if (huge.gpu.api() == .opengl) glfw.makeContextCurrent(window.handle);
     window.setAttributes(attributes);
-    window.context = huge.gpu.createWindowContext(window) catch
+    window.context = huge.vk.WindowContext.create(window) catch
         return Error.ContextCreationError;
 
     return window;
 }
 
 pub fn destroy(self: *Window) void {
-    huge.gpu.destroyWindowContext(self.context);
+    self.context.destroy();
     if (@intFromPtr(self.handle) != @intFromPtr(&destroyed_window))
         glfw.destroyWindow(self.handle);
     self.handle = @constCast(&destroyed_window);
