@@ -58,7 +58,11 @@ pub fn initLogicalDeviceAndQueues(layers: Names, extensions: Names, create_queue
             vulkan.queues[i] = vulkan.device.getDeviceQueue(vulkan.pd().queue_family_indices[i], 0);
     }
 }
-pub fn initPhysicalDevices(minimal_vulkan_version: vk.Version, extensions: Names) Error!usize {
+pub fn initPhysicalDevices(
+    minimal_vulkan_version: vk.Version,
+    extensions: Names,
+    minimal_queue_configuration: vulkan.QueueConfiguration,
+) Error!usize {
     var count: u32 = 0;
     _ = vulkan.instance.enumeratePhysicalDevices(&count, null) catch
         return Error.PhysicalDeviceInitializationFailure;
@@ -83,7 +87,13 @@ pub fn initPhysicalDevices(minimal_vulkan_version: vk.Version, extensions: Names
     vulkan.valid_physical_device_count = count;
     var i: usize = 0;
     while (i < vulkan.valid_physical_device_count) : (i += 1)
-        initPhysicalDevice(&vulkan.physical_devices[i], minimal_vulkan_version, extensions, dummy_window) catch {
+        initPhysicalDevice(
+            &vulkan.physical_devices[i],
+            minimal_vulkan_version,
+            extensions,
+            dummy_window,
+            minimal_queue_configuration,
+        ) catch {
             vulkan.valid_physical_device_count -= 1;
             std.mem.swap(vulkan.PhysicalDevice, &vulkan.physical_devices[i], &vulkan.physical_devices[vulkan.valid_physical_device_count]);
             i -= 1;
@@ -118,7 +128,13 @@ fn scorePhysicalDevice(physical_device: vulkan.PhysicalDevice) u32 {
     return score;
 }
 
-fn initPhysicalDevice(p: *vulkan.PhysicalDevice, minimal_vulkan_version: vk.Version, extensions: Names, dummy_window: huge.Window.DummyWindow) Error!void {
+fn initPhysicalDevice(
+    p: *vulkan.PhysicalDevice,
+    minimal_vulkan_version: vk.Version,
+    extensions: Names,
+    dummy_window: huge.Window.DummyWindow,
+    minimal_queue_configuration: vulkan.QueueConfiguration,
+) Error!void {
     p.features = getPhysicalDeviceFeatures(p.handle);
 
     const properties = vulkan.instance.getPhysicalDeviceProperties(p.handle); //limits?
@@ -137,10 +153,14 @@ fn initPhysicalDevice(p: *vulkan.PhysicalDevice, minimal_vulkan_version: vk.Vers
     try checkExtensionPresence(extensions, available_extensions);
     vulkan.arena.allocator().free(available_extensions);
 
-    p.queue_family_indices = try getQueueFamilyIndices(p.handle, dummy_window);
+    p.queue_family_indices = try getQueueFamilyIndices(p.handle, dummy_window, minimal_queue_configuration);
     p.features.sparse_binding = ~p.queue_family_indices[@intFromEnum(vulkan.QueueType.sparse_binding)] != 0;
 }
-fn getQueueFamilyIndices(handle: vk.PhysicalDevice, dummy_window: huge.Window.DummyWindow) Error![vulkan.queue_type_count]QFI {
+fn getQueueFamilyIndices(
+    handle: vk.PhysicalDevice,
+    dummy_window: huge.Window.DummyWindow,
+    minimal_queue_configuration: vulkan.QueueConfiguration,
+) Error![vulkan.queue_type_count]QFI {
     const queue_family_properties = vulkan.instance.getPhysicalDeviceQueueFamilyPropertiesAlloc(handle, vulkan.arena.allocator()) catch
         return Error.OutOfMemory;
     defer vulkan.arena.allocator().free(queue_family_properties);
@@ -174,7 +194,7 @@ fn getQueueFamilyIndices(handle: vk.PhysicalDevice, dummy_window: huge.Window.Du
     if (!util.matchFlagStructs(
         vulkan.QueueConfiguration,
         any_flags,
-        minimal_required_queue_family_config,
+        minimal_queue_configuration,
     )) return Error.PhysicalDeviceInitializationFailure;
 
     //iterate through all the possible queue configurations score them and use the best one
@@ -335,11 +355,6 @@ const queueConfigurationScoringRules: []const std.meta.Tuple(&.{ QueueFamilyConf
     .{ -150, .{ .graphics, .transfer } },
     .{ -90, .{ .compute, .transfer } },
     .{ 30, .{ .sparse_binding, .transfer } },
-};
-pub const minimal_required_queue_family_config: vulkan.QueueConfiguration = .{
-    .graphics = true,
-    .transfer = true,
-    .compute = true,
 };
 const Error = vulkan.Error;
 const QFI = vulkan.QFI;

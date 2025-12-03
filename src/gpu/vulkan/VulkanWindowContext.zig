@@ -33,7 +33,7 @@ fences: [mfif]vk.Fence = @splat(.null_handle),
 inline fn fif(self: WindowContext) u32 {
     return @max(@max(self.image_count, 1) - 1, 1);
 }
-pub fn reset(self: *WindowContext) Error!void {
+pub fn startFrame(self: *WindowContext) Error!void {
     //INCREMENT FIF INDEX
     self.fif_index = (self.fif_index + 1) % self.fif();
     // if (~self.acquired_image_index != 0) return;

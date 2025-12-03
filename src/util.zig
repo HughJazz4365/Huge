@@ -36,22 +36,25 @@ pub fn enumLen(Enum: type) usize {
 }
 pub fn StructFromEnum(Enum: type, T: type, default_value: ?T, layout: std.builtin.Type.ContainerLayout) type {
     const em = @typeInfo(Enum).@"enum";
-    var struct_fields: [em.fields.len]std.builtin.Type.StructField = undefined;
-    inline for (em.fields, &struct_fields) |ef, *sf| {
-        sf.* = .{
-            .default_value_ptr = if (default_value) |d| &d else null,
-            .alignment = if (layout == .@"packed") 0 else @alignOf(T),
-            .is_comptime = false,
-            .name = ef.name,
-            .type = T,
-        };
+    var struct_field_names: [em.fields.len][]const u8 = undefined;
+    var struct_field_types: [em.fields.len]type = undefined;
+    const sturct_field_attributes: [em.fields.len]std.builtin.Type.StructField.Attributes =
+        @splat(.{
+            .@"comptime" = false,
+            .@"align" = if (layout == .@"packed") null else @alignOf(T),
+            .default_value_ptr = if (default_value) |dv| &dv else null,
+        });
+    inline for (em.fields, 0..) |ef, i| {
+        struct_field_names[i] = ef.name;
+        struct_field_types[i] = T;
     }
-    return @Type(.{ .@"struct" = .{
-        .decls = &.{},
-        .fields = &struct_fields,
-        .is_tuple = false,
-        .layout = layout,
-    } });
+    return @Struct(
+        layout,
+        null,
+        &struct_field_names,
+        &struct_field_types,
+        &sturct_field_attributes,
+    );
 }
 pub fn matchFlagStructs(comptime FlagStruct: type, value: FlagStruct, pattern: FlagStruct) bool {
     return inline for (@typeInfo(FlagStruct).@"struct".fields) |sf| {

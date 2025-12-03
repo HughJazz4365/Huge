@@ -65,7 +65,11 @@ pub fn init(allocator: Allocator, create_queue_configuration: QueueConfiguration
     var device_extension_list: List([*:0]const u8) = .initBuffer(&extension_name_buf);
 
     device_extension_list.appendAssumeCapacity(vk.extensions.khr_swapchain.name);
-    current_physical_device_index = try vkinit.initPhysicalDevices(minimal_vulkan_version, device_extension_list.items);
+    current_physical_device_index = try vkinit.initPhysicalDevices(
+        minimal_vulkan_version,
+        device_extension_list.items,
+        create_queue_configuration,
+    );
 
     physical_device_memory_properties = instance.getPhysicalDeviceMemoryProperties(pd().handle);
     try vkinit.initLogicalDeviceAndQueues(layers, device_extension_list.items, create_queue_configuration);
