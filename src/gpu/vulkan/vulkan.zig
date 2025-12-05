@@ -4,6 +4,7 @@ const util = huge.util;
 const glfw = huge.Window.glfw;
 
 const vk = @import("vk.zig");
+const vulkan_alloc = @import("vulkanAllocation.zig");
 pub var bwp: vk.BaseWrapper = undefined;
 pub var iwp: vk.InstanceWrapper = undefined;
 pub var dwp: vk.DeviceWrapper = undefined;
@@ -26,12 +27,15 @@ pub var instance: vk.InstanceProxy = undefined;
 pub var physical_devices: [3]PhysicalDevice = @splat(.{});
 pub var valid_physical_device_count: usize = 0;
 var current_physical_device_index: usize = 0;
-var physical_device_memory_properties: vk.PhysicalDeviceMemoryProperties = undefined;
+pub var physical_device_memory_properties: vk.PhysicalDeviceMemoryProperties = undefined;
 
 pub var device: vk.DeviceProxy = undefined;
 
 pub var queues: [queue_type_count]vk.Queue = @splat(.null_handle);
 // var command_pools: [queue_type_count]vk.CommandPool = @splat(.null_handle);
+
+var heap_storage: [(4 * 1024) / MemoryHeap.general_size]MemoryHeap = undefined;
+pub var heaps: List(MemoryHeap) = .initBuffer(&heap_storage);
 
 //==============================
 
@@ -47,6 +51,13 @@ pub inline fn qfi(queue_type: QueueType) QFI {
 }
 
 //======|initialization|========
+
+pub fn initThreadResources(out: []ThreadID) Error!void {
+    for (out, 0..) |*o, i| {
+        o.* = @enumFromInt(i + 1);
+    }
+}
+pub const ThreadID = enum(u32) { main = 0, _ };
 
 pub fn init(allocator: Allocator, create_queue_configuration: QueueConfiguration) Error!void {
     arena = .init(allocator);
@@ -146,6 +157,10 @@ pub const loader = &struct {
 const Allocator = std.mem.Allocator;
 const List = std.ArrayList;
 pub const WindowContext = @import("VulkanWindowContext.zig");
+const MemoryHeap = vulkan_alloc.MemoryHeap;
+const MemoryFlags = vulkan_alloc.MemoryFlags;
+const DeviceAllocation = vulkan_alloc.DeviceAllocation;
+const allocateDeviceMemory = vulkan_alloc.allocateDeviceMemory;
 
 pub const Error = error{
     InitializationFailure,

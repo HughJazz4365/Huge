@@ -3,6 +3,8 @@ const huge = @import("root.zig");
 const math = huge.math;
 
 pub fn rut(T: type, a: T, b: T) T {
+    if (@typeInfo(T) != .int)
+        @compileError("rut: T must be integer and not " ++ @typeName(T));
     return (a + b - 1) / b * b;
 }
 pub fn ipp(i: anytype) @typeInfo(@TypeOf(i)).pointer.child {
