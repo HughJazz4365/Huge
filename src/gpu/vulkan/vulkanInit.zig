@@ -7,6 +7,59 @@ const glfw = huge.Window.glfw;
 const vk = @import("vk.zig");
 
 const Names = []const [*:0]const u8;
+//this need allocation size tracking
+
+pub fn getArenaAllocationCallbacks(arena: *std.heap.ArenaAllocator) vk.AllocationCallbacks {
+    // pfn_reallocation:
+    // vk.PfnReallocationFunction,
+    // pfn_free:
+    // vk.PfnFreeFunction,
+    // pfn_internal_allocation:
+    // vk.PfnInternalAllocationNotification = null,
+    // pfn_internal_free:
+    // vk.PfnInternalFreeNotification = null,
+
+    const S = struct {
+        pub fn allocate(
+            user_data: ?*anyopaque,
+            size: usize,
+            alignment: usize,
+            _: vk.SystemAllocationScope,
+        ) callconv(vk.vulkan_call_conv) ?*anyopaque {
+            const arena_ptr: *std.heap.ArenaAllocator = @ptrCast(@alignCast(user_data.?));
+            return @ptrCast((switch (alignment) {
+                else => arena_ptr.allocator().alignedAlloc(u8, .@"1", size),
+                2 => arena_ptr.allocator().alignedAlloc(u8, .@"2", size),
+                4 => arena_ptr.allocator().alignedAlloc(u8, .@"4", size),
+                8 => arena_ptr.allocator().alignedAlloc(u8, .@"8", size),
+                16 => arena_ptr.allocator().alignedAlloc(u8, .@"16", size),
+                32 => arena_ptr.allocator().alignedAlloc(u8, .@"32", size),
+                64 => arena_ptr.allocator().alignedAlloc(u8, .@"64", size),
+            }) catch return null);
+        }
+        pub fn free(_: ?*anyopaque, _: ?*anyopaque) callconv(vk.vulkan_call_conv) void {
+            // const arena_ptr: *std.heap.ArenaAllocator = @ptrCast(@alignCast(user_data.?));
+            // if (memory) |mem| arena_ptr.allocator().free(@as([*]u8, @ptrCast(mem)));
+        }
+        pub fn realloc(
+            user_data: ?*anyopaque,
+            original: ?*anyopaque,
+            size: usize,
+            alignment: usize,
+            _: vk.SystemAllocationScope,
+        ) callconv(vk.vulkan_call_conv) ?*anyopaque {
+            const arena_ptr: *std.heap.ArenaAllocator = @ptrCast(@alignCast(user_data.?));
+            _ = .{ user_data, original, size, alignment, arena_ptr };
+        }
+    };
+    return .{
+        .p_user_data = @ptrCast(@alignCast(arena)),
+        .pfn_allocation = &S.allocate,
+        .pfn_reallocation = null,
+        .pfn_free = &S.free,
+        .pfn_internal_allocation = null,
+    };
+}
 pub fn initLogicalDeviceAndQueues(layers: Names, extensions: Names, create_queue_configuration: vulkan.QueueConfiguration) Error!void {
     var queue_create_infos: [vulkan.queue_type_count]vk.DeviceQueueCreateInfo = undefined;
     var queues_to_create: [vulkan.queue_type_count]u8 = undefined;
@@ -29,9 +82,14 @@ pub fn initLogicalDeviceAndQueues(layers: Names, extensions: Names, create_queue
             }
         }
     }
+    const synchronization2_feature_ptr: *const anyopaque =
+        &vk.PhysicalDeviceSynchronization2Features{ .synchronization_2 = .true };
 
     const dynamic_rendering_feature_ptr: *const anyopaque =
-        &vk.PhysicalDeviceDynamicRenderingFeatures{ .dynamic_rendering = .true };
+        &vk.PhysicalDeviceDynamicRenderingFeatures{
+            .p_next = @constCast(synchronization2_feature_ptr),
+            .dynamic_rendering = .true,
+        };
 
     const device_create_info: vk.DeviceCreateInfo = .{
         .enabled_extension_count = @intCast(extensions.len),

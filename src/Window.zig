@@ -11,7 +11,7 @@ pub const Handle = *glfw.Window;
 handle: Handle = undefined,
 title: [:0]const u8,
 
-context: huge.vk.WindowContext = undefined,
+context: huge.vk.VKWindowContext = undefined,
 current_input_mask: [input_mask_len]usize = @splat(0),
 last_input_mask: [input_mask_len]usize = @splat(0),
 
@@ -35,6 +35,7 @@ pub fn tick(self: *Window) bool {
     self.cursor_pos = self.getCursorPosRaw();
 
     huge.time.tick();
+    huge.vk.fif_index = (huge.vk.fif_index + 1) % huge.vk.mfif;
     self.querryInput();
     return true;
 }
@@ -131,13 +132,13 @@ pub fn create(attributes: Attributes) Error!Window {
     };
     // if (huge.gpu.api() == .opengl) glfw.makeContextCurrent(window.handle);
     window.setAttributes(attributes);
-    window.context = huge.vk.WindowContext.create(window) catch
+    window.context = huge.vk.VKWindowContext.create(window) catch
         return Error.ContextCreationError;
 
     return window;
 }
 
-pub fn destroy(self: *Window) void {
+pub fn close(self: *Window) void {
     self.context.destroy();
     if (@intFromPtr(self.handle) != @intFromPtr(&destroyed_window))
         glfw.destroyWindow(self.handle);

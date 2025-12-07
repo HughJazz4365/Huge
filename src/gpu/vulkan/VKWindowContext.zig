@@ -7,11 +7,9 @@ const vulkan = @import("vulkan.zig");
 const vk = @import("vk.zig");
 const WindowContext = @This();
 const mic = 3; //max_image_count
-const mfif = mic - 1; //max_frame_in_flight
+pub const mfif = mic - 1; //max_frame_in_flight
 
 acquired_image_index: u32 = std.math.maxInt(u32),
-
-fif_index: u32 = 0, //current frame-in-flight index
 
 surface: vk.SurfaceKHR = .null_handle,
 request_recreate: bool = false,
@@ -35,7 +33,7 @@ inline fn fif(self: WindowContext) u32 {
 }
 pub fn startFrame(self: *WindowContext) Error!void {
     //INCREMENT FIF INDEX
-    self.fif_index = (self.fif_index + 1) % self.fif();
+    // self.fif_index = (self.fif_index + 1) % self.fif();
     // if (~self.acquired_image_index != 0) return;
 
     _ = vulkan.device.waitForFences(1, &.{self.fences[self.fif_index]}, .true, vulkan.timeout) catch
@@ -48,64 +46,6 @@ pub fn startFrame(self: *WindowContext) Error!void {
         self.acquire_semaphores[self.fif_index],
         .null_handle,
     ) catch return Error.ResourceCreationError).image_index;
-}
-
-fn present(self: WindowContext, cmd: vk.CommandBuffer) !void {
-    const image_barrier: vk.ImageMemoryBarrier = .{
-        .src_access_mask = .{ .color_attachment_write_bit = true },
-        .dst_access_mask = .{},
-        .old_layout = .undefined,
-        .new_layout = .present_src_khr,
-        .src_queue_family_index = vulkan.qfi(.presentation),
-        .dst_queue_family_index = vulkan.qfi(.presentation),
-        .image = self.images[self.acquired_image_index],
-        .subresource_range = .{
-            .aspect_mask = .{ .color_bit = true },
-            .base_mip_level = 0,
-            .level_count = 1,
-            .base_array_layer = 0,
-            .layer_count = 1,
-        },
-    };
-    vulkan.device.cmdPipelineBarrier(cmd, .{
-        .all_commands_bit = true,
-    }, .{
-        .bottom_of_pipe_bit = true,
-    }, .{}, 0, null, 0, null, 1, &.{
-        image_barrier,
-    });
-
-    try vulkan.device.endCommandBuffer(cmd);
-    try vulkan.device.queueSubmit(
-        vulkan.queue(.presentation),
-        1,
-        &.{.{
-            .command_buffer_count = 1,
-            .p_command_buffers = &.{cmd},
-            .p_wait_dst_stage_mask = &.{.{ .color_attachment_output_bit = true }},
-
-            .wait_semaphore_count = 1,
-            .p_wait_semaphores = &.{self.acquire_semaphores[self.fif_index]},
-            .signal_semaphore_count = 1,
-            .p_signal_semaphores = &.{self.submit_semaphores[self.acquired_image_index]},
-        }},
-        self.fences[self.fif_index],
-    );
-
-    _ = vulkan.device.queuePresentKHR(vulkan.queue(.presentation), &.{
-        .wait_semaphore_count = 1,
-        .p_wait_semaphores = &.{self.submit_semaphores[self.acquired_image_index]},
-        .swapchain_count = 1,
-        .p_swapchains = &.{self.swapchain},
-        .p_image_indices = &.{self.acquired_image_index},
-    }) catch |err|
-        switch (err) {
-            error.OutOfDateKHR => {
-                @panic("recreate swapchain");
-                // self.request_recreate = true;
-            },
-            else => return error.PresentationError,
-        };
 }
 
 pub fn create(window: huge.Window) !WindowContext {
