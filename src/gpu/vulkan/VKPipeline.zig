@@ -14,78 +14,6 @@ entry_point_infos: [max_stages]hgsl.EntryPointInfo = @splat(.{}),
 
 pub const max_stages = @typeInfo(GraphicsPipelineSource).@"struct".fields.len;
 
-pub fn cmdSetPropertiesStruct(
-    self: VKPipeline,
-    cmd: *const vulkan.VKCommandBuffer,
-    @"struct": anytype,
-) void {
-    const S = @TypeOf(@"struct");
-    const st = @typeInfo(S).@"struct";
-    if (st.is_tuple) @compileError("struct must not be tuple");
-    inline for (st.fields) |sf| {
-        self.cmdSetProperty(cmd, sf.name, @field(@"struct", sf.name));
-    }
-}
-
-pub fn cmdSetProperty(
-    self: VKPipeline,
-    cmd: *const vulkan.VKCommandBuffer,
-    name: []const u8,
-    value: anytype,
-) void {
-    const T = if (@typeInfo(@TypeOf(value)) == .pointer) @typeInfo(@TypeOf(value)).pointer.child else @TypeOf(value);
-    const ptr: *const T = if (@typeInfo(@TypeOf(value)) == .pointer) value else &value;
-    switch (T) {
-        huge.Transform => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(&ptr.modelMat()))),
-        huge.Camera => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(&ptr.viewProjectionMat()))),
-        vulkan.DescriptorID => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(&@as(u32, @intFromEnum(ptr.*))))),
-        // Buffer => b.pipelineSetOpaqueUniform(self, name, 0, 0, .buffer, @intFromEnum(value)),
-        // Texture => b.pipelineSetOpaqueUniform(self, name, 0, 0, .texture, @intFromEnum(value)),
-        else => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(ptr))),
-    }
-}
-pub fn cmdPushConstant(
-    self: VKPipeline,
-    cmd: *const vulkan.VKCommandBuffer,
-    name: []const u8,
-    bytes: []const u8,
-) void {
-    huge.dassert(cmd.queue_type == .graphics or cmd.queue_type == .compute);
-    if (!cmd.state.recording) return;
-
-    const current_cmd = cmd.handles[vulkan.fif_index];
-
-    var offsets: [max_stages]u32 = undefined;
-    var offset_count: u32 = 0;
-    const stage_flags = self.getPushConstantStageMask();
-    for (&self.entry_point_infos) |ep_info| {
-        pcloop: for (ep_info.push_constant_mappings) |pc| {
-            if (util.strEql(name, pc.name)) {
-                if (pc.offset >= vulkan.max_push_constant_bytes)
-                    continue; //fully out of bounds
-
-                //dont repeat cmdPushConstants call with the same offset
-                for (offsets[0..offset_count]) |o| if (o == pc.offset) continue :pcloop;
-
-                offsets[offset_count] = pc.offset;
-                offset_count += 1;
-
-                const size = @min(pc.size, bytes.len);
-                const trimmed_size = size - ((pc.offset + size) -| vulkan.max_push_constant_bytes);
-                // std.debug.print("PC: size: {d}, offset: {d}\n", .{ trimmed_size, pc.offset });
-                if (trimmed_size != 0) vulkan.device.cmdPushConstants(
-                    current_cmd,
-                    self.getLayout() catch unreachable,
-                    stage_flags,
-                    pc.offset,
-                    trimmed_size,
-                    @ptrCast(bytes.ptr),
-                );
-            }
-        }
-    }
-}
-
 pub fn createFiles(io: std.Io, source: PipelineSource) Error!VKPipeline {
     const StageCompilationInfo = struct {
         path: []const u8 = "",
@@ -318,7 +246,7 @@ pub fn createFiles(io: std.Io, source: PipelineSource) Error!VKPipeline {
 
     return pipeline;
 }
-fn getPushConstantStageMask(self: VKPipeline) vk.ShaderStageFlags {
+pub fn getPushConstantStageMask(self: VKPipeline) vk.ShaderStageFlags {
     if (self.type == .graphics) {
         var mask: vk.Flags = 0;
         for (0..max_stages) |i|

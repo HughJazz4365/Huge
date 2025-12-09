@@ -13,12 +13,10 @@ pub fn main() !void {
     defer huge.deinit();
     huge.Time.avg_threshold = 5 * std.time.ns_per_s;
 
-    var window: huge.Window = try .create(.{
-        .title = "sample#0",
-        .size = .{ 800, 600 },
-        .resizable = true,
-    });
+    var window: huge.Window =
+        try .create(.{ .title = "sample#0", .size = .{ 800, 600 } });
     defer window.close();
+    window.disableCursor();
 
     const pipeline: vk.VKPipeline = try .createFiles(io, .{ .graphics = .{
         .vertex = .{ .path = "shader.hgsl", .entry_point = "vert" },
@@ -26,19 +24,16 @@ pub fn main() !void {
     } });
     var cmd = try vk.allocateCommandBuffer(.main, .graphics);
 
-    var camera_transform: huge.Transform = .{
-        .position = .{ 0, 0, -5 },
-    };
+    var camera_transform: huge.Transform = .{ .position = .{ 0, 0, -5 } };
     var camera: huge.Camera = .{
         .aspect_ratio = window.aspectRatio(),
         .transform = &camera_transform,
     };
-
-    // const mesh: huge.rend.MeshRenderer = try .new(@ptrCast(&cube.vertices), u16, &cube.indices);
     var cube_transform: huge.Transform = .{
-        // .position = .{ -1, -1.4, 2 },
-        // .scale = .{ 2.5, 1, 2 },
+        .position = .{ -1, -1.4, 2 },
+        .scale = .{ 2.5, 1, 2 },
     };
+
     var vertex_buffer: vk.VKBuffer = try .createValue(&cube.vertices, .{ .vertex = true }, .{});
     var index_buffer: vk.VKBuffer = try .createValue(&cube.indices, .{ .index = true }, .{});
     var mvp_buffer: vk.VKBuffer = try .create(@sizeOf(math.mat) * 2, .{ .storage = true }, .{
@@ -47,10 +42,10 @@ pub fn main() !void {
     });
     const mvp_mapping: []math.mat = @ptrCast(@alignCast(try mvp_buffer.map(0)));
 
-    window.disableCursor();
-    var euler: math.vec3 = @splat(0);
+    // var texture : vk.VKTexture =
 
-    try vk.updateDescriptorSet(&.{&mvp_buffer});
+    var euler: math.vec3 = @splat(0);
+    try vk.updateDescriptorSet(&.{&mvp_buffer}, &.{}, &.{});
     while (window.tick()) {
         //game update
         const speed = 5;
@@ -62,23 +57,23 @@ pub fn main() !void {
 
         cube_transform.rotation = math.quatFromEuler(.{ 0, huge.time.seconds(), 0 });
 
+        //write into persistently mapped buffer
+        mvp_mapping[0] = camera.viewProjectionMat();
+        mvp_mapping[1] = cube_transform.modelMat();
+
         //render
         try vk.acquireSwapchainImage(&window.context);
         try cmd.begin();
 
         vk.cmdBeginRenderingToWindow(&cmd, &window.context, .{ .color = @splat(0.09) });
+        window.setAttributes(.{});
         vk.cmdSetDynamicStateConfig(&cmd, .{
             .viewport = .{ .size = @floatFromInt(window.size()) },
             .scissor = .{ .size = window.size() },
             .cull_mode = .back,
         });
 
-        window.setAttributes(.{});
-
-        mvp_mapping[0] = camera.viewProjectionMat();
-        mvp_mapping[1] = cube_transform.modelMat();
-
-        pipeline.cmdSetPropertiesStruct(&cmd, .{
+        vk.cmdPushConstantsStruct(&cmd, pipeline, .{
             .mvp_id = mvp_buffer.descriptor_id,
             .eye_pos = camera_transform.position,
         });

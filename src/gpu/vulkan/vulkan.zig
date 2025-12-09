@@ -80,6 +80,78 @@ pub inline fn qfi(queue_type: QueueType) QFI {
 
 //=====|command recording|======
 
+pub fn cmdPushConstantsStruct(
+    cmd: *const VKCommandBuffer,
+    pipeline: VKPipeline,
+    @"struct": anytype,
+) void {
+    const S = @TypeOf(@"struct");
+    const st = @typeInfo(S).@"struct";
+    if (st.is_tuple) @compileError("struct must not be tuple");
+    inline for (st.fields) |sf| {
+        cmdPushConstant(cmd, pipeline, sf.name, @field(@"struct", sf.name));
+    }
+}
+
+pub fn cmdPushConstant(
+    cmd: *const VKCommandBuffer,
+    pipeline: VKPipeline,
+    name: []const u8,
+    value: anytype,
+) void {
+    const T = if (@typeInfo(@TypeOf(value)) == .pointer) @typeInfo(@TypeOf(value)).pointer.child else @TypeOf(value);
+    const ptr: *const T = if (@typeInfo(@TypeOf(value)) == .pointer) value else &value;
+    switch (T) {
+        huge.Transform => cmdPushConstantBytes(cmd, pipeline, name, @ptrCast(@alignCast(&ptr.modelMat()))),
+        huge.Camera => cmdPushConstantBytes(cmd, pipeline, name, @ptrCast(@alignCast(&ptr.viewProjectionMat()))),
+        DescriptorID => cmdPushConstantBytes(cmd, pipeline, name, @ptrCast(@alignCast(&@as(u32, @intFromEnum(ptr.*))))),
+        // Buffer => b.pipelineSetOpaqueUniform(self, name, 0, 0, .buffer, @intFromEnum(value)),
+        // Texture => b.pipelineSetOpaqueUniform(self, name, 0, 0, .texture, @intFromEnum(value)),
+        else => cmdPushConstantBytes(cmd, pipeline, name, @ptrCast(@alignCast(ptr))),
+    }
+}
+pub fn cmdPushConstantBytes(
+    cmd: *const VKCommandBuffer,
+    pipeline: VKPipeline,
+    name: []const u8,
+    bytes: []const u8,
+) void {
+    huge.dassert(cmd.queue_type == .graphics or cmd.queue_type == .compute);
+    if (!cmd.state.recording) return;
+
+    const current_cmd = cmd.handles[fif_index];
+
+    var offsets: [VKPipeline.max_stages]u32 = undefined;
+    var offset_count: u32 = 0;
+    const stage_flags = pipeline.getPushConstantStageMask();
+    for (&pipeline.entry_point_infos) |ep_info| {
+        pcloop: for (ep_info.push_constant_mappings) |pc| {
+            if (util.strEql(name, pc.name)) {
+                if (pc.offset >= max_push_constant_bytes)
+                    continue; //fully out of bounds
+
+                //dont repeat cmdPushConstants call with the same offset
+                for (offsets[0..offset_count]) |o| if (o == pc.offset) continue :pcloop;
+
+                offsets[offset_count] = pc.offset;
+                offset_count += 1;
+
+                const size = @min(pc.size, bytes.len);
+                const trimmed_size = size - ((pc.offset + size) -| max_push_constant_bytes);
+                // std.debug.print("PC: size: {d}, offset: {d}\n", .{ trimmed_size, pc.offset });
+                if (trimmed_size != 0) device.cmdPushConstants(
+                    current_cmd,
+                    pipeline.getLayout() catch unreachable,
+                    stage_flags,
+                    pc.offset,
+                    trimmed_size,
+                    @ptrCast(bytes.ptr),
+                );
+            }
+        }
+    }
+}
+
 pub fn cmdBindVertexBuffer(cmd: *VKCommandBuffer, buffer: *VKBuffer, offset: u64) void {
     huge.dassert(cmd.queue_type == .graphics);
     huge.dassert(cmd.state.recording);
@@ -476,7 +548,10 @@ pub fn acquireSwapchainImage(window_ctx: *VKWindowContext) Error!void {
 //=====|resource creation|======
 pub fn updateDescriptorSet(
     storage_buffers: []const *VKBuffer,
+    storage_images: []const u8,
+    sampled_images: []const u8,
 ) Error!void {
+    _ = .{ storage_images, sampled_images };
     descriptor_buffer_info_list.items = descriptor_buffer_info_list.items[0..0];
     device.updateDescriptorSets(bindless_descriptor_types.len, &blk: {
         var write_descriptor_sets: [bindless_descriptor_types.len]vk.WriteDescriptorSet = undefined;

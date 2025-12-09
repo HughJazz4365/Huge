@@ -1,38 +1,36 @@
 const MVP = struct{member vp, model : mat4}
 descriptor(0, 0) bindless_mvp_buffers: []@Buffer(MVP, .ssbo)
+descriptor(0, 1) bindless_sampled_textures: []@Texture(f32, ._2d, true)
 
-push mvp_id : u32
-push eye_pos : vec3
+push mvp_id : u32, eye_pos: vec3
 
 const vert = entrypoint(.vertex){
 	const vp, model =
 	bindless_mvp_buffers[mvp_id].vp,
 	bindless_mvp_buffers[mvp_id].model
-	in pos, normal: vec3
-	out(.flat) out_normal, out out_pos = 
-	|(@transpose(@inverse(mat3{model})) * normal), pos
+	in pos, normal: vec3, uv: vec2
+	out(.flat) out_normal, out out_pos, out_uv = 
+	|(@transpose(@inverse(mat3{model})) * normal), pos, uv
 
 	const position = vp * model * vec4{pos, 1} 
 	@position = position
 }
 
 const frag = entrypoint(.fragment){
-	in(.flat) normal, in world_pos: vec3
+	in(.flat) normal, in world_pos: vec3, uv: vec2
 	const albedo : vec3 = .{1.0, 0.4, 0.1}
 
-	//ubo start
 	const light_dir = |vec3{3, -9, 1}
 	const ambient = 0.15
 	const spec_pow = 40
 	const spec_intensity = 2
-	//ubo end
 
 	const view_dir = |(world_pos - eye_pos)
 	const diffuse = -light_dir *** normal
 
 	const specular = (@reflect(-light_dir, normal) *** view_dir) ^ spec_pow * spec_intensity * diffuse 
-	//* @celi(diffuse)
+	//* @ceil(diffuse)
 
-	out o: vec4 = .{albedo * .{diffuse + ambient + specular}, 1}
+	out o: vec4 = .{.{uv, 1} * albedo * .{diffuse + ambient + specular}, 1}
 }
 
