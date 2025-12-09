@@ -13,11 +13,28 @@ size: u64 = 0,
 usage: BufferUsage = .{},
 mapping: ?[*]u8 = null,
 
-pub fn loadBytes(
-    self: *VKBuffer,
-    bytes: []const u8,
-    offset: u64,
-) Error!void {
+descriptor_id: vulkan.DescriptorID = .null,
+
+pub fn createValue(
+    value: anytype,
+    usage: BufferUsage,
+    memory_flags: vulkan.MemoryFlags,
+) Error!VKBuffer {
+    const tinfo = @typeInfo(@TypeOf(value));
+    const T = if (tinfo == .pointer) tinfo.pointer.child else @TypeOf(value);
+    const size: u64 = @sizeOf(T);
+    var mem_flags = memory_flags;
+    mem_flags.add(.{ .host_visible = true });
+    var buffer: VKBuffer = try .create(size, usage, mem_flags);
+    try buffer.load(value, 0);
+    return buffer;
+}
+pub fn load(self: *VKBuffer, value: anytype, offset: u64) Error!void {
+    const tinfo = @typeInfo(@TypeOf(value));
+    const bytes: []const u8 = @ptrCast(@alignCast(if (tinfo == .pointer) value else &value));
+    try self.loadBytes(bytes, offset);
+}
+pub fn loadBytes(self: *VKBuffer, bytes: []const u8, offset: u64) Error!void {
     const mapped = try self.map(offset);
     const len = @min(mapped.len, bytes.len);
     @memcpy(mapped[0..len], bytes[0..len]);
@@ -79,8 +96,8 @@ pub fn create(
 pub const BufferUsage = packed struct {
     transfer_src: bool = false,
     transfer_dst: bool = false,
-    uniform: bool = false,
     storage: bool = false,
+    uniform: bool = false,
     index: bool = false,
     vertex: bool = false,
     indirect: bool = false,

@@ -20,6 +20,7 @@ const pr = std.debug.print;
 pub const timeout: u64 = std.time.ns_per_s * 5;
 pub const max_push_constant_bytes = 128;
 pub const mfif = VKWindowContext.mfif;
+pub const max_descriptors_of_type = 2000;
 
 //===========|state|============
 
@@ -55,6 +56,14 @@ const max_threads = 4;
 var command_pools: [mfif][max_threads][queue_type_count]vk.CommandPool = @splat(@splat(@splat(.null_handle)));
 
 pub var pipeline_layouts: [1 << (VKPipeline.max_stages) + 1]vk.PipelineLayout = @splat(.null_handle);
+
+pub var descriptor_set_layout: vk.DescriptorSetLayout = .null_handle;
+var descriptor_pool: vk.DescriptorPool = .null_handle;
+var descriptor_set: vk.DescriptorSet = .null_handle;
+const bindless_descriptor_types = [_]vk.DescriptorType{.storage_buffer};
+
+var descriptor_buffer_info_list: List(vk.DescriptorBufferInfo) = .empty;
+var descriptor_image_info_list: List(vk.DescriptorImageInfo) = .empty;
 
 //==============================
 
@@ -247,10 +256,6 @@ pub fn cmdDraw(cmd: *VKCommandBuffer, pipeline: VKPipeline, params: DrawParams) 
 
     const current_cmd = cmd.handles[fif_index];
     cmdBindPipeline(cmd, pipeline);
-    // if (cmd.bound_pipeline != pipeline) {
-    //     cmd.bound_pipeline = pipeline;
-    //      device.cmdBi
-    // }
 
     if (params.mode == .indexed) {
         device.cmdDrawIndexed(
@@ -274,10 +279,17 @@ fn cmdBindPipeline(cmd: *VKCommandBuffer, pipeline: VKPipeline) void {
     huge.dassert(cmd.state.rendering);
 
     if (cmd.state.bound_pipeline == pipeline.handle) return;
+    const current_cmd = cmd.handles[fif_index];
 
+    const bind_point: vk.PipelineBindPoint = if (pipeline.type == .graphics)
+        .graphics
+    else
+        .compute;
+
+    device.cmdBindDescriptorSets(current_cmd, bind_point, pipeline.getLayout() catch unreachable, 0, 1, &.{descriptor_set}, 0, null);
     device.cmdBindPipeline(
-        cmd.handles[fif_index],
-        .graphics,
+        current_cmd,
+        bind_point,
         pipeline.handle,
     );
     cmd.state.bound_pipeline = pipeline.handle;
@@ -462,6 +474,37 @@ pub fn acquireSwapchainImage(window_ctx: *VKWindowContext) Error!void {
 }
 
 //=====|resource creation|======
+pub fn updateDescriptorSet(
+    storage_buffers: []const *VKBuffer,
+) Error!void {
+    descriptor_buffer_info_list.items = descriptor_buffer_info_list.items[0..0];
+    device.updateDescriptorSets(bindless_descriptor_types.len, &blk: {
+        var write_descriptor_sets: [bindless_descriptor_types.len]vk.WriteDescriptorSet = undefined;
+        inline for (&write_descriptor_sets, &bindless_descriptor_types, 0..) |*wd, dt, i| {
+            for (storage_buffers) |b| if (b.usage.storage) {
+                b.descriptor_id = @enumFromInt(descriptor_buffer_info_list.items.len);
+                try descriptor_buffer_info_list.append(arena.allocator(), .{
+                    .buffer = b.handle,
+                    .offset = 0,
+                    .range = b.size,
+                });
+            };
+            wd.* = .{
+                .dst_set = descriptor_set,
+                .dst_binding = @truncate(i),
+                .dst_array_element = 0,
+                .descriptor_count = @truncate(descriptor_buffer_info_list.items.len),
+                .descriptor_type = dt,
+                .p_buffer_info = descriptor_buffer_info_list.items.ptr,
+                .p_image_info = &.{},
+                .p_texel_buffer_view = &.{},
+            };
+        }
+        break :blk write_descriptor_sets;
+    }, 0, null);
+}
+
+pub const DescriptorID = enum(u32) { null = ~@as(u32, 0), _ };
 
 pub fn allocateCommandBuffer(thread_id: ThreadID, queue_type: QueueType) Error!VKCommandBuffer {
     const pool = try getCommandPool(thread_id, queue_type);
@@ -567,6 +610,49 @@ pub fn init(allocator: Allocator, create_queue_configuration: QueueConfiguration
         .optimize = .none, //.speed
         .max_push_constant_buffer_size = max_push_constant_bytes,
     });
+
+    descriptor_pool = device.createDescriptorPool(&.{
+        .flags = .{ .update_after_bind_bit = true },
+        .max_sets = 1,
+        .pool_size_count = bindless_descriptor_types.len,
+        .p_pool_sizes = &blk: {
+            var pool_sizes: [bindless_descriptor_types.len]vk.DescriptorPoolSize = undefined;
+            for (&pool_sizes, &bindless_descriptor_types) |*ps, dt|
+                ps.* = .{ .type = dt, .descriptor_count = max_descriptors_of_type };
+            break :blk pool_sizes;
+        },
+    }, vka) catch |err| return wrapMemoryErrors(err);
+    descriptor_set_layout = device.createDescriptorSetLayout(&.{
+        .p_next = &vk.DescriptorSetLayoutBindingFlagsCreateInfo{
+            .binding_count = @truncate(bindless_descriptor_types.len),
+            .p_binding_flags = &@as(
+                [bindless_descriptor_types.len]vk.DescriptorBindingFlags,
+                @splat(.{
+                    .update_after_bind_bit = true,
+                    .partially_bound_bit = true,
+                }),
+            ),
+        },
+        .flags = .{ .update_after_bind_pool_bit = true },
+        .binding_count = bindless_descriptor_types.len,
+        .p_bindings = &blk: {
+            var bindings: [bindless_descriptor_types.len]vk.DescriptorSetLayoutBinding = undefined;
+            for (&bindings, &bindless_descriptor_types, 0..) |*b, dt, i|
+                b.* = .{
+                    .binding = @truncate(i),
+                    .descriptor_type = dt,
+                    .descriptor_count = max_descriptors_of_type,
+                    .stage_flags = @bitCast(@as(vk.Flags, (1 << 6) - 1)),
+                };
+            break :blk bindings;
+        },
+    }, vka) catch |err| return wrapMemoryErrors(err);
+
+    device.allocateDescriptorSets(&.{
+        .descriptor_pool = descriptor_pool,
+        .descriptor_set_count = 1,
+        .p_set_layouts = &.{descriptor_set_layout},
+    }, @ptrCast(&descriptor_set)) catch |err| return wrapMemoryErrors(err);
 }
 
 pub fn deinit() void {

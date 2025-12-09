@@ -1,9 +1,13 @@
-//descriptor(0, 0) ubo : @Buffer(struct{
-//	member eye_pos: vec3
-//}, .ubo)
+const MVP = struct{member vp, model : mat4}
+descriptor(0, 0) bindless_mvp_buffers: []@Buffer(MVP, .ssbo)
+
+push mvp_id : u32
+push eye_pos : vec3
 
 const vert = entrypoint(.vertex){
-	push vp, model : mat4
+	const vp, model =
+	bindless_mvp_buffers[mvp_id].vp,
+	bindless_mvp_buffers[mvp_id].model
 	in pos, normal: vec3
 	out(.flat) out_normal, out out_pos = 
 	|(@transpose(@inverse(mat3{model})) * normal), pos
@@ -19,17 +23,16 @@ const frag = entrypoint(.fragment){
 	//ubo start
 	const light_dir = |vec3{3, -9, 1}
 	const ambient = 0.15
-	const spec_pow = 30
+	const spec_pow = 40
 	const spec_intensity = 2
 	//ubo end
 
-	const view_dir = |(.{0} - world_pos)
-	//const view_dir = |(ubo.eye_pos - world_pos)
+	const view_dir = |(world_pos - eye_pos)
 	const diffuse = -light_dir *** normal
 
-	const specular = (@reflect(-light_dir, normal) *** view_dir) ^ spec_pow * spec_intensity  * diffuse
+	const specular = (@reflect(-light_dir, normal) *** view_dir) ^ spec_pow * spec_intensity * diffuse 
+	//* @celi(diffuse)
 
-	//out o: vec4 = .{albedo * .{ specular}, 1}
 	out o: vec4 = .{albedo * .{diffuse + ambient + specular}, 1}
 }
 

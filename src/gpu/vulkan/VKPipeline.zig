@@ -38,6 +38,7 @@ pub fn cmdSetProperty(
     switch (T) {
         huge.Transform => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(&ptr.modelMat()))),
         huge.Camera => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(&ptr.viewProjectionMat()))),
+        vulkan.DescriptorID => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(&@as(u32, @intFromEnum(ptr.*))))),
         // Buffer => b.pipelineSetOpaqueUniform(self, name, 0, 0, .buffer, @intFromEnum(value)),
         // Texture => b.pipelineSetOpaqueUniform(self, name, 0, 0, .texture, @intFromEnum(value)),
         else => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(ptr))),
@@ -82,19 +83,7 @@ pub fn cmdPushConstant(
                 );
             }
         }
-        //log if didnt found
     }
-    // const offset: u32 = 0;
-    // const trimmed_size = bytes.len;
-    // const stage_flags: vk.ShaderStageFlags = .{};
-    // vulkan.device.cmdPushConstants(
-    //     current_cmd,
-    //     self.getLayout() catch unreachable,
-    //     stage_flags,
-    //     offset,
-    //     trimmed_size,
-    //     @ptrCast(bytes.ptr),
-    // );
 }
 
 pub fn createFiles(io: std.Io, source: PipelineSource) Error!VKPipeline {
@@ -338,7 +327,7 @@ fn getPushConstantStageMask(self: VKPipeline) vk.ShaderStageFlags {
         return @bitCast(mask);
     } else return .{ .compute_bit = self.entry_point_infos[0].push_constant_mappings.len > 0 };
 }
-fn getLayout(self: VKPipeline) Error!vk.PipelineLayout {
+pub fn getLayout(self: VKPipeline) Error!vk.PipelineLayout {
     var index: usize = 0;
     var count: u32 = 0;
     var push_constant_ranges: [max_stages]vk.PushConstantRange = undefined;
@@ -366,8 +355,8 @@ fn getLayout(self: VKPipeline) Error!vk.PipelineLayout {
 
     if (vulkan.pipeline_layouts[index] == .null_handle) {
         vulkan.pipeline_layouts[index] = vulkan.device.createPipelineLayout(&.{
-            // set_layout_count: u32 = 0,
-            // p_set_layouts: ?[*]const DescriptorSetLayout = null,
+            .set_layout_count = 1,
+            .p_set_layouts = &.{vulkan.descriptor_set_layout},
             .push_constant_range_count = count,
             .p_push_constant_ranges = &push_constant_ranges,
         }, vulkan.vka) catch |err|

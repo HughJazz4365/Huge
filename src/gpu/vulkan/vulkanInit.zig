@@ -82,12 +82,62 @@ pub fn initLogicalDeviceAndQueues(layers: Names, extensions: Names, create_queue
             }
         }
     }
-    const synchronization2_feature_ptr: *const anyopaque =
-        &vk.PhysicalDeviceSynchronization2Features{ .synchronization_2 = .true };
+    //device p_next chain
+    const physical_device_features_ptr: *const anyopaque =
+        &vk.PhysicalDeviceFeatures2{
+            .features = .{
+                .image_cube_array = .true,
+                .geometry_shader = .true,
+                .tessellation_shader = .true,
+                .logic_op = .true,
+                .multi_draw_indirect = .true,
+                .depth_clamp = .true,
+                .depth_bias_clamp = .true,
+                .fill_mode_non_solid = .true,
+                .depth_bounds = .true,
+                .wide_lines = .true,
+                .large_points = .true,
+                .multi_viewport = .true,
+                .texture_compression_bc = .true,
+                .vertex_pipeline_stores_and_atomics = .true,
+                .fragment_stores_and_atomics = .true,
+                .shader_tessellation_and_geometry_point_size = .true,
+                .shader_storage_image_extended_formats = .true,
+                .shader_storage_image_multisample = .true,
+                .shader_storage_image_read_without_format = .true,
+                .shader_storage_image_write_without_format = .true,
+                .shader_uniform_buffer_array_dynamic_indexing = .true,
+                .shader_sampled_image_array_dynamic_indexing = .true,
+                .shader_storage_buffer_array_dynamic_indexing = .true,
+                .shader_storage_image_array_dynamic_indexing = .true,
+                .shader_float_64 = .true,
+                .shader_int_64 = .true,
+                .shader_int_16 = .true,
+            },
+        };
+    const descriptor_indexing_features_ptr: *const anyopaque =
+        &vk.PhysicalDeviceDescriptorIndexingFeatures{
+            .p_next = @constCast(physical_device_features_ptr),
+            .descriptor_binding_partially_bound = .true,
+            .runtime_descriptor_array = .true,
 
-    const dynamic_rendering_feature_ptr: *const anyopaque =
+            .shader_sampled_image_array_non_uniform_indexing = .true,
+            .shader_storage_buffer_array_non_uniform_indexing = .true,
+            .shader_storage_image_array_non_uniform_indexing = .true,
+
+            .descriptor_binding_sampled_image_update_after_bind = .true,
+            .descriptor_binding_storage_image_update_after_bind = .true,
+            .descriptor_binding_storage_buffer_update_after_bind = .true,
+        };
+    const synchronization2_features_ptr: *const anyopaque =
+        &vk.PhysicalDeviceSynchronization2Features{
+            .p_next = @constCast(descriptor_indexing_features_ptr),
+            .synchronization_2 = .true,
+        };
+
+    const dynamic_rendering_features_ptr: *const anyopaque =
         &vk.PhysicalDeviceDynamicRenderingFeatures{
-            .p_next = @constCast(synchronization2_feature_ptr),
+            .p_next = @constCast(synchronization2_features_ptr),
             .dynamic_rendering = .true,
         };
 
@@ -99,7 +149,7 @@ pub fn initLogicalDeviceAndQueues(layers: Names, extensions: Names, create_queue
         .pp_enabled_layer_names = layers.ptr,
         .enabled_layer_count = @intCast(layers.len),
 
-        .p_next = dynamic_rendering_feature_ptr,
+        .p_next = dynamic_rendering_features_ptr,
     };
 
     const device_handle = vulkan.instance.createDevice(

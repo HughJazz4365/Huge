@@ -55,6 +55,15 @@ fn getCursorPosRaw(self: *const Window) math.vec2 {
     glfw.getCursorPos(self.handle, &pos[0], &pos[1]);
     return .{ @floatCast(pos[0]), @floatCast(pos[1]) };
 }
+pub fn firstPersonCameraMovement(self: *const Window, euler: *math.vec3, sensitivity: f32) void {
+    const cursor_delta = self.getCursorDeltaNormalized();
+    const limit = math.d2r * (90 - 0.1);
+    euler.* = .{
+        std.math.clamp(euler[0] + -cursor_delta[1] * sensitivity, -limit, limit),
+        euler[1] + cursor_delta[0] * sensitivity,
+        0,
+    };
+}
 // test 3d movement input (wasd - wars)
 pub fn warsudVector(self: *const Window, yrot: f32) math.vec3 {
     const topdown: math.vec3 = .{

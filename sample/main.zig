@@ -39,29 +39,26 @@ pub fn main() !void {
         // .position = .{ -1, -1.4, 2 },
         // .scale = .{ 2.5, 1, 2 },
     };
-    var vertex_buffer: vk.VKBuffer = try .create(@sizeOf(@TypeOf(cube.vertices)), .{ .vertex = true }, .{ .host_visible = true });
-    try vertex_buffer.loadBytes(@ptrCast(@alignCast(&cube.vertices)), 0);
-    var index_buffer: vk.VKBuffer = try .create(@sizeOf(@TypeOf(cube.indices)), .{ .index = true }, .{ .host_visible = true });
-    try index_buffer.loadBytes(@ptrCast(@alignCast(&cube.indices)), 0);
+    var vertex_buffer: vk.VKBuffer = try .createValue(&cube.vertices, .{ .vertex = true }, .{});
+    var index_buffer: vk.VKBuffer = try .createValue(&cube.indices, .{ .index = true }, .{});
+    var mvp_buffer: vk.VKBuffer = try .create(@sizeOf(math.mat) * 2, .{ .storage = true }, .{
+        .host_visible = true,
+        .host_coherent = true,
+    });
+    const mvp_mapping: []math.mat = @ptrCast(@alignCast(try mvp_buffer.map(0)));
 
     window.disableCursor();
     var euler: math.vec3 = @splat(0);
 
+    try vk.updateDescriptorSet(&.{&mvp_buffer});
     while (window.tick()) {
         //game update
         const speed = 5;
-        const sensitivity = 1000;
+        const sensitivity = 400;
 
-        const cursor_delta = window.getCursorDeltaNormalized();
-        const limit = math.r2d * (90 - 0.001);
-        euler = .{
-            std.math.clamp(euler[0] + -cursor_delta[1] * sensitivity, -limit, limit),
-            euler[1] + cursor_delta[0] * sensitivity,
-            0,
-        };
+        window.firstPersonCameraMovement(&euler, sensitivity);
         camera_transform.rotation = math.quatFromEuler(euler);
         camera_transform.position += math.scale(window.warsudVector(euler[1]), huge.time.delta() * speed);
-        // try ubo.loadBytes(@ptrCast(@alignCast(&camera_transform.position)), 0);
 
         cube_transform.rotation = math.quatFromEuler(.{ 0, huge.time.seconds(), 0 });
 
@@ -78,9 +75,12 @@ pub fn main() !void {
 
         window.setAttributes(.{});
 
+        mvp_mapping[0] = camera.viewProjectionMat();
+        mvp_mapping[1] = cube_transform.modelMat();
+
         pipeline.cmdSetPropertiesStruct(&cmd, .{
-            .model = &cube_transform,
-            .vp = &camera,
+            .mvp_id = mvp_buffer.descriptor_id,
+            .eye_pos = camera_transform.position,
         });
         vk.cmdBindIndexBuffer(&cmd, &index_buffer, 0, .u16);
         vk.cmdBindVertexBuffer(&cmd, &vertex_buffer, 0);

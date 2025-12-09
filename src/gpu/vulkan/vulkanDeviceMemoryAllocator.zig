@@ -44,9 +44,12 @@ pub fn allocateDeviceMemory(
         break :blk vulkan.heaps.items.len - 1;
     };
     const aligned_offset = util.rut(u64, vulkan.heaps.items[heap_index].consumed, memory_requirements.alignment);
-    std.debug.print("[{d}]ALLOC: {d} KiB(+frag = {d} B)\n", .{
+    std.debug.print("[{d}]ALLOC: {d:.5} KiB(HI: {d}, Off: {d} B, Pad: {d} B)\n", .{
         vulkan.heaps.items[heap_index].memory_type_index,
         @as(f64, @floatFromInt(memory_requirements.size)) / 1024.0,
+
+        heap_index,
+        vulkan.heaps.items[heap_index].consumed,
         aligned_offset - vulkan.heaps.items[heap_index].consumed,
     });
     vulkan.heaps.items[heap_index].consumed = aligned_offset + memory_requirements.size;
