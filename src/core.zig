@@ -14,13 +14,13 @@ pub const Camera = struct {
         return math.mul(self.projectionMat(), self.viewMat());
     }
     pub fn projectionMat(self: *const Camera) mat {
-        return if (huge.gpu.coordinateSystem() == .right_handed)
+        return if (true or huge.gpu.coordinateSystem() == .right_handed)
             math.perspectiveMatRh(self.fov, self.aspect_ratio, self.near, self.far)
         else
             @panic("left handed projection matrix!");
     }
     pub fn viewMat(self: *const Camera) mat {
-        return if (huge.gpu.coordinateSystem() == .right_handed)
+        return if (true or huge.gpu.coordinateSystem() == .right_handed)
             math.viewMatRh(self.transform.position, self.transform.lookDir())
         else
             @panic("left handed view matrix!");

@@ -21,8 +21,8 @@ pub fn main() !void {
     defer window.close();
 
     const pipeline: vk.VKPipeline = try .createFiles(io, .{ .graphics = .{
-        .vertex = .{ .path = "triangle.hgsl", .entry_point = "vert" },
-        .fragment = .{ .path = "triangle.hgsl", .entry_point = "frag" },
+        .vertex = .{ .path = "shader.hgsl", .entry_point = "vert" },
+        .fragment = .{ .path = "shader.hgsl", .entry_point = "frag" },
     } });
     var cmd = try vk.allocateCommandBuffer(.main, .graphics);
 
@@ -33,15 +33,16 @@ pub fn main() !void {
         .aspect_ratio = window.aspectRatio(),
         .transform = &camera_transform,
     };
-    _ = &camera;
 
     // const mesh: huge.rend.MeshRenderer = try .new(@ptrCast(&cube.vertices), u16, &cube.indices);
     var cube_transform: huge.Transform = .{
-        .position = .{ -1, -1.4, 2 },
-        .scale = .{ 2.5, 1, 2 },
+        // .position = .{ -1, -1.4, 2 },
+        // .scale = .{ 2.5, 1, 2 },
     };
-    const buff: vk.VKBuffer = try .create(@sizeOf(@TypeOf(cube.vertices)), .{ .vertex = true }, .{});
-    _ = buff;
+    var vertex_buffer: vk.VKBuffer = try .create(@sizeOf(@TypeOf(cube.vertices)), .{ .vertex = true }, .{ .host_visible = true });
+    try vertex_buffer.loadBytes(@ptrCast(@alignCast(&cube.vertices)), 0);
+    var index_buffer: vk.VKBuffer = try .create(@sizeOf(@TypeOf(cube.indices)), .{ .index = true }, .{ .host_visible = true });
+    try index_buffer.loadBytes(@ptrCast(@alignCast(&cube.indices)), 0);
 
     window.disableCursor();
     var euler: math.vec3 = @splat(0);
@@ -68,21 +69,23 @@ pub fn main() !void {
         try vk.acquireSwapchainImage(&window.context);
         try cmd.begin();
 
-        vk.cmdBeginRenderingToWindow(&cmd, &window.context, .{ .color = .{ 1, 0, 0, 0 } });
-
-        window.setAttributes(.{});
+        vk.cmdBeginRenderingToWindow(&cmd, &window.context, .{ .color = @splat(0.09) });
         vk.cmdSetDynamicStateConfig(&cmd, .{
             .viewport = .{ .size = @floatFromInt(window.size()) },
             .scissor = .{ .size = window.size() },
-            .primitive_topology = .triangle_strip,
+            .cull_mode = .back,
         });
+
+        window.setAttributes(.{});
 
         pipeline.cmdSetPropertiesStruct(&cmd, .{
             .model = &cube_transform,
             .vp = &camera,
         });
+        vk.cmdBindIndexBuffer(&cmd, &index_buffer, 0, .u16);
+        vk.cmdBindVertexBuffer(&cmd, &vertex_buffer, 0);
 
-        vk.cmdDraw(&cmd, pipeline, .{ .count = 4 });
+        vk.cmdDraw(&cmd, pipeline, .{ .count = cube.indices.len, .mode = .indexed });
 
         try vk.present(&cmd, &window.context);
     }

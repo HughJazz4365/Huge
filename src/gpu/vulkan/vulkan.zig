@@ -71,9 +71,28 @@ pub inline fn qfi(queue_type: QueueType) QFI {
 
 //=====|command recording|======
 
+pub fn cmdBindVertexBuffer(cmd: *VKCommandBuffer, buffer: *VKBuffer, offset: u64) void {
+    huge.dassert(cmd.queue_type == .graphics);
+    huge.dassert(cmd.state.recording);
+
+    const current_cmd = cmd.handles[fif_index];
+    huge.dassert(buffer.usage.vertex);
+
+    device.cmdBindVertexBuffers(current_cmd, 0, 1, &.{buffer.handle}, &.{offset});
+}
+pub fn cmdBindIndexBuffer(cmd: *VKCommandBuffer, buffer: *VKBuffer, offset: u64, index_type: IndexType) void {
+    huge.dassert(cmd.queue_type == .graphics);
+    huge.dassert(cmd.state.recording);
+
+    const current_cmd = cmd.handles[fif_index];
+    huge.dassert(buffer.usage.index);
+
+    device.cmdBindIndexBuffer(current_cmd, buffer.handle, offset, if (index_type == .u32) .uint32 else .uint16);
+}
+const IndexType = enum { u32, u16 };
 pub fn cmdSetDynamicState(cmd: *VKCommandBuffer, dynamic_state: DynamicState) void {
     huge.dassert(cmd.queue_type == .graphics);
-    if (!cmd.state.recording) return;
+    huge.dassert(cmd.state.recording);
 
     const current_cmd = cmd.handles[fif_index];
 
@@ -117,7 +136,7 @@ pub fn cmdSetDynamicState(cmd: *VKCommandBuffer, dynamic_state: DynamicState) vo
 }
 pub fn cmdSetDynamicStateConfig(cmd: *VKCommandBuffer, c: DynamicStateConfig) void {
     huge.dassert(cmd.queue_type == .graphics);
-    if (!cmd.state.recording) return;
+    huge.dassert(cmd.state.recording);
 
     const current_cmd = cmd.handles[fif_index];
 
@@ -224,7 +243,7 @@ pub const CullMode = enum { none, back, front, both };
 
 pub fn cmdDraw(cmd: *VKCommandBuffer, pipeline: VKPipeline, params: DrawParams) void {
     huge.dassert(cmd.queue_type == .graphics);
-    if (!cmd.state.rendering) return;
+    huge.dassert(cmd.state.rendering);
 
     const current_cmd = cmd.handles[fif_index];
     cmdBindPipeline(cmd, pipeline);
@@ -251,9 +270,11 @@ pub fn cmdDraw(cmd: *VKCommandBuffer, pipeline: VKPipeline, params: DrawParams) 
     );
 }
 fn cmdBindPipeline(cmd: *VKCommandBuffer, pipeline: VKPipeline) void {
-    // if pipeline is graphics assert that cmd.queue_type == .graphics
-    // same with compute
-    if (!cmd.state.rendering or cmd.state.bound_pipeline == pipeline.handle) return;
+    huge.dassert(cmd.queue_type == @as(QueueType, if (pipeline.type == .graphics) .graphics else .compute));
+    huge.dassert(cmd.state.rendering);
+
+    if (cmd.state.bound_pipeline == pipeline.handle) return;
+
     device.cmdBindPipeline(
         cmd.handles[fif_index],
         .graphics,
@@ -277,9 +298,10 @@ pub const DrawMode = enum {
 };
 pub fn cmdBeginRenderingToWindow(cmd: *VKCommandBuffer, window_ctx: *VKWindowContext, clear_value: ClearValue) void {
     huge.dassert(cmd.queue_type == .graphics);
-    if (!cmd.state.recording) return;
+    huge.dassert(cmd.state.recording);
 
-    if (cmd.state.rendering or !cmd.state.recording) return;
+    if (cmd.state.rendering) return;
+
     const current_cmd = cmd.handles[fif_index];
     defer cmd.state.rendering = true;
 
@@ -647,6 +669,7 @@ pub const loader = &struct {
 const Allocator = std.mem.Allocator;
 const List = std.ArrayList;
 pub const VKPipeline = @import("VKPipeline.zig");
+pub const PipelineType = VKPipeline.PipelineType;
 pub const VKWindowContext = @import("VKWindowContext.zig");
 pub const VKBuffer = @import("VKBuffer.zig");
 pub const MemoryHeap = vulkan_alloc.MemoryHeap;
@@ -676,4 +699,6 @@ pub const Error = error{
     MissingShaderEntryPoint,
     WrongShaderEntryPointType,
     PipelineStageIOMismatch,
+
+    MemoryMapFailed,
 };

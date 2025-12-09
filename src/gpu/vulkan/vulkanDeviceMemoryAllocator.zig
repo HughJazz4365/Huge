@@ -17,7 +17,11 @@ pub fn allocateDeviceMemory(
 
     const heap_index: usize = for (vulkan.heaps.items, 0..) |*heap, i| {
         if (heap.memory_type_index == memory_type_index and
-            heap.size - heap.consumed >= memory_requirements.size) break i;
+            heap.size - heap.consumed >= memory_requirements.size)
+        {
+            vulkan.heaps.items[i].memory_flags.add(flags);
+            break i;
+        }
     } else blk: {
         try expandHeapsIfNeeded();
         const is_special = flags.host_coherent or flags.host_visible or flags.device_local;
@@ -35,11 +39,13 @@ pub fn allocateDeviceMemory(
             }, vulkan.vka) catch return Error.OutOfDeviceMemory,
             .size = allocation_size,
             .memory_type_index = memory_type_index,
+            .memory_flags = flags,
         });
         break :blk vulkan.heaps.items.len - 1;
     };
     const aligned_offset = util.rut(u64, vulkan.heaps.items[heap_index].consumed, memory_requirements.alignment);
-    std.debug.print("ALLOC: {d} KiB(+frag = {d} B)\n", .{
+    std.debug.print("[{d}]ALLOC: {d} KiB(+frag = {d} B)\n", .{
+        vulkan.heaps.items[heap_index].memory_type_index,
         @as(f64, @floatFromInt(memory_requirements.size)) / 1024.0,
         aligned_offset - vulkan.heaps.items[heap_index].consumed,
     });
@@ -68,6 +74,7 @@ pub const MemoryHeap = struct {
     size: u64,
 
     memory_type_index: u32,
+    memory_flags: MemoryFlags = .{},
     //store fragmented regions
 
     pub const general_size: u64 = 128 * MiB;
@@ -85,6 +92,13 @@ pub const MemoryFlags = packed struct {
             .device_local_bit = self.device_local,
             .host_visible_bit = self.host_visible,
             .host_coherent_bit = self.host_coherent,
+        };
+    }
+    pub fn add(self: *MemoryFlags, other: MemoryFlags) void {
+        self.* = .{
+            .device_local = self.device_local | other.device_local,
+            .host_visible = self.host_visible | other.host_visible,
+            .host_coherent = self.host_coherent | other.host_coherent,
         };
     }
 };

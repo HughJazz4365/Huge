@@ -23,7 +23,7 @@ pub fn cmdSetPropertiesStruct(
     const st = @typeInfo(S).@"struct";
     if (st.is_tuple) @compileError("struct must not be tuple");
     inline for (st.fields) |sf| {
-        self.cmdSetProperty(cmd, sf.name, &@field(@"struct", sf.name));
+        self.cmdSetProperty(cmd, sf.name, @field(@"struct", sf.name));
     }
 }
 
@@ -36,13 +36,12 @@ pub fn cmdSetProperty(
     const T = if (@typeInfo(@TypeOf(value)) == .pointer) @typeInfo(@TypeOf(value)).pointer.child else @TypeOf(value);
     const ptr: *const T = if (@typeInfo(@TypeOf(value)) == .pointer) value else &value;
     switch (T) {
-        huge.Transform => cmdPushConstant(self, cmd, name, &ptr.modelMat()),
-        huge.Camera => cmdPushConstant(self, cmd, name, &ptr.viewProjectionMat()),
+        huge.Transform => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(&ptr.modelMat()))),
+        huge.Camera => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(&ptr.viewProjectionMat()))),
         // Buffer => b.pipelineSetOpaqueUniform(self, name, 0, 0, .buffer, @intFromEnum(value)),
         // Texture => b.pipelineSetOpaqueUniform(self, name, 0, 0, .texture, @intFromEnum(value)),
         else => cmdPushConstant(self, cmd, name, @ptrCast(@alignCast(ptr))),
     }
-    self.cmdPushConstant(cmd, name, @ptrCast(@alignCast(value)));
 }
 pub fn cmdPushConstant(
     self: VKPipeline,
@@ -70,7 +69,7 @@ pub fn cmdPushConstant(
                 offsets[offset_count] = pc.offset;
                 offset_count += 1;
 
-                const size = @min(pc.size, bytes.len * 8);
+                const size = @min(pc.size, bytes.len);
                 const trimmed_size = size - ((pc.offset + size) -| vulkan.max_push_constant_bytes);
                 // std.debug.print("PC: size: {d}, offset: {d}\n", .{ trimmed_size, pc.offset });
                 if (trimmed_size != 0) vulkan.device.cmdPushConstants(

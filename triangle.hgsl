@@ -8,9 +8,9 @@ const vert = entrypoint(.vertex){
 	}
 
 	const pos = verts[@vertex_id]
-	@position = vec4{pos, 0, 1} 
+	//@position = vec4{pos, 0, 1} 
 	out uv : vec2 = pos * .{0.5} + .{0.5}
-	//@position = vp * model * vec4{uv, 0, 1} 
+	@position = vp * model * vec4{uv, 0, 1} 
 }
 
 const frag = entrypoint(.fragment){
