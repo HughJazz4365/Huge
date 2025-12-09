@@ -6,7 +6,7 @@ const util = huge.util;
 const glfw = huge.Window.glfw;
 
 const vk = @import("vk.zig");
-const vulkan_alloc = @import("vulkanAllocation.zig");
+const vulkan_alloc = @import("vulkanDeviceMemoryAllocator.zig");
 pub var bwp: vk.BaseWrapper = undefined;
 pub var iwp: vk.InstanceWrapper = undefined;
 pub var dwp: vk.DeviceWrapper = undefined;
@@ -33,6 +33,7 @@ pub var physical_devices: [3]PhysicalDevice = @splat(.{});
 pub var valid_physical_device_count: usize = 0;
 var current_physical_device_index: usize = 0;
 pub var physical_device_memory_properties: vk.PhysicalDeviceMemoryProperties = undefined;
+pub var physical_device_limits: vk.PhysicalDeviceLimits = undefined;
 
 pub var device: vk.DeviceProxy = undefined;
 
@@ -43,17 +44,17 @@ pub var fif_index: u32 = 0;
 
 var shader_error_writer_buffer: [256]u8 = undefined;
 var shader_error_writer: std.fs.File.Writer = undefined;
-var shader_compiler: hgsl.Compiler = undefined;
+pub var shader_compiler: hgsl.Compiler = undefined;
 
 //=========|resources|==========
 
-var heap_storage: [(4 * 1024) / MemoryHeap.general_size]MemoryHeap = undefined;
+var heap_storage: [(4 * 1024 * MemoryHeap.MiB) / MemoryHeap.general_size]MemoryHeap = undefined;
 pub var heaps: List(MemoryHeap) = .initBuffer(&heap_storage);
 
 const max_threads = 4;
 var command_pools: [mfif][max_threads][queue_type_count]vk.CommandPool = @splat(@splat(@splat(.null_handle)));
 
-var pipeline_layout: [1 << VKPipeline.max_stages]vk.PipelineLayout = @splat(.null_handle);
+pub var pipeline_layouts: [1 << (VKPipeline.max_stages) + 1]vk.PipelineLayout = @splat(.null_handle);
 
 //==============================
 
@@ -70,8 +71,160 @@ pub inline fn qfi(queue_type: QueueType) QFI {
 
 //=====|command recording|======
 
+pub fn cmdSetDynamicState(cmd: *VKCommandBuffer, dynamic_state: DynamicState) void {
+    huge.dassert(cmd.queue_type == .graphics);
+    if (!cmd.state.recording) return;
+
+    const current_cmd = cmd.handles[fif_index];
+
+    switch (dynamic_state) {
+        inline else => |val, tag| {
+            const name = @tagName(tag);
+
+            if (@field(cmd.state.dynamic_state_set, name) and
+                std.meta.eql(val, @field(cmd.dynamic_state, name))) return;
+
+            @field(cmd.state.dynamic_state_set, name) = true;
+            @field(cmd.dynamic_state, name) = val;
+        },
+    }
+    switch (dynamic_state) {
+        .viewport => |viewport| device.cmdSetViewport(current_cmd, 0, 1, &.{.{
+            .x = viewport.offset[0],
+            .y = viewport.offset[1],
+            .width = viewport.size[0],
+            .height = viewport.size[1],
+            .max_depth = viewport.max_depth,
+            .min_depth = viewport.min_depth,
+        }}),
+        .scissor => |scissor| device.cmdSetScissor(current_cmd, 0, 1, &.{.{
+            .offset = .{ .x = scissor.offset[0], .y = scissor.offset[1] },
+            .extent = .{ .width = scissor.size[0], .height = scissor.size[1] },
+        }}),
+        .line_width => |line_width| device.cmdSetLineWidth(current_cmd, line_width),
+        .depth_bias => |depth_bias| device.cmdSetDepthBias(current_cmd, depth_bias.constant, depth_bias.clamp, depth_bias.slope),
+        .cull_mode => |cull_mode| device.cmdSetCullMode(current_cmd, .{
+            .back_bit = cull_mode == .back or cull_mode == .both,
+            .front_bit = cull_mode == .front or cull_mode == .both,
+        }),
+        .winding_order => |winding_order| device.cmdSetFrontFace(current_cmd, if (winding_order == .clockwise) .clockwise else .counter_clockwise),
+        .primitive_topology => |primitive_topology| device.cmdSetPrimitiveTopology(current_cmd, castPrimitiveTopology(primitive_topology)),
+        .depth_test_enable => |depth_test_enable| device.cmdSetDepthTestEnable(current_cmd, @enumFromInt(@intFromBool(depth_test_enable))),
+        .depth_write_enable => |depth_write_enable| device.cmdSetDepthWriteEnable(current_cmd, @enumFromInt(@intFromBool(depth_write_enable))),
+        .depth_compare_op => |depth_compare_op| device.cmdSetDepthCompareOp(current_cmd, castCompareOp(depth_compare_op)),
+        // else => {},
+    }
+}
+pub fn cmdSetDynamicStateConfig(cmd: *VKCommandBuffer, c: DynamicStateConfig) void {
+    huge.dassert(cmd.queue_type == .graphics);
+    if (!cmd.state.recording) return;
+
+    const current_cmd = cmd.handles[fif_index];
+
+    const un = @typeInfo(DynamicState).@"union";
+    inline for (un.fields, 0..) |uf, i| {
+        if (@field(cmd.state.dynamic_state_set, uf.name) and
+            std.meta.eql(@field(c, uf.name), @field(cmd.dynamic_state, uf.name))) return;
+        switch (@as(un.tag_type.?, @enumFromInt(i))) {
+            .viewport => device.cmdSetViewport(current_cmd, 0, 1, &.{.{
+                .x = c.viewport.offset[0],
+                .y = c.viewport.offset[1],
+                .width = c.viewport.size[0],
+                .height = c.viewport.size[1],
+                .max_depth = c.viewport.max_depth,
+                .min_depth = c.viewport.min_depth,
+            }}),
+            .scissor => device.cmdSetScissor(current_cmd, 0, 1, &.{.{
+                .offset = .{ .x = c.scissor.offset[0], .y = c.scissor.offset[1] },
+                .extent = .{ .width = c.scissor.size[0], .height = c.scissor.size[1] },
+            }}),
+            .line_width => device.cmdSetLineWidth(current_cmd, c.line_width),
+            .depth_bias => device.cmdSetDepthBias(current_cmd, c.depth_bias.constant, c.depth_bias.clamp, c.depth_bias.slope),
+            .cull_mode => device.cmdSetCullMode(current_cmd, .{
+                .back_bit = c.cull_mode == .back or c.cull_mode == .both,
+                .front_bit = c.cull_mode == .front or c.cull_mode == .both,
+            }),
+            .winding_order => device.cmdSetFrontFace(current_cmd, if (c.winding_order == .clockwise) .clockwise else .counter_clockwise),
+            .primitive_topology => device.cmdSetPrimitiveTopology(current_cmd, castPrimitiveTopology(c.primitive_topology)),
+            .depth_test_enable => device.cmdSetDepthTestEnable(current_cmd, @enumFromInt(@intFromBool(c.depth_test_enable))),
+            .depth_write_enable => device.cmdSetDepthWriteEnable(current_cmd, @enumFromInt(@intFromBool(c.depth_write_enable))),
+            .depth_compare_op => device.cmdSetDepthCompareOp(current_cmd, castCompareOp(c.depth_compare_op)),
+        }
+
+        @field(cmd.state.dynamic_state_set, uf.name) = true;
+        @field(cmd.dynamic_state, uf.name) = @field(c, uf.name);
+    }
+}
+pub const DynamicState = union(enum) {
+    viewport: Viewport,
+    scissor: Rect2D,
+    line_width: f32,
+    depth_bias: DepthBias,
+    cull_mode: CullMode,
+    winding_order: WindingOrder,
+    primitive_topology: PrimitiveTopology,
+    depth_test_enable: bool,
+    depth_write_enable: bool,
+    depth_compare_op: CompareOp,
+};
+pub const DynamicStateConfig = util.StructFromUnion(DynamicState, .{
+    Viewport{},
+    Rect2D{},
+    1,
+    DepthBias{},
+    CullMode.none,
+    WindingOrder.clockwise,
+    PrimitiveTopology.triangle,
+    false,
+    false,
+    CompareOp.never,
+});
+pub const CompareOp = enum {
+    never,
+    always,
+
+    equal,
+    not_equal,
+
+    less,
+    less_eql,
+    greater,
+    greater_eql,
+};
+pub const PrimitiveTopology = enum {
+    point,
+
+    line,
+    line_strip,
+
+    triangle,
+    triangle_strip,
+    triangle_fan,
+
+    // line_list_with_adjacency,
+    // line_strip_with_adjacency,
+    // triangle_list_with_adjacency,
+    // triangle_strip_with_adjacency,
+
+    // patch_list,
+};
+pub const WindingOrder = enum { clockwise, counter_clockwise };
+pub const Viewport = struct {
+    offset: math.vec2 = @splat(0),
+    size: math.vec2 = @splat(1),
+    min_depth: f32 = 0,
+    max_depth: f32 = 1,
+};
+pub const Rect2D = struct {
+    offset: math.ivec2 = @splat(0),
+    size: math.uvec2 = @splat(1),
+};
+pub const DepthBias = struct { constant: f32 = 0, clamp: f32 = 0, slope: f32 = 0 };
+pub const CullMode = enum { none, back, front, both };
+
 pub fn cmdDraw(cmd: *VKCommandBuffer, pipeline: VKPipeline, params: DrawParams) void {
     huge.dassert(cmd.queue_type == .graphics);
+    if (!cmd.state.rendering) return;
 
     const current_cmd = cmd.handles[fif_index];
     cmdBindPipeline(cmd, pipeline);
@@ -100,7 +253,7 @@ pub fn cmdDraw(cmd: *VKCommandBuffer, pipeline: VKPipeline, params: DrawParams) 
 fn cmdBindPipeline(cmd: *VKCommandBuffer, pipeline: VKPipeline) void {
     // if pipeline is graphics assert that cmd.queue_type == .graphics
     // same with compute
-    if (cmd.state.bound_pipeline == pipeline.handle) return;
+    if (!cmd.state.rendering or cmd.state.bound_pipeline == pipeline.handle) return;
     device.cmdBindPipeline(
         cmd.handles[fif_index],
         .graphics,
@@ -124,6 +277,7 @@ pub const DrawMode = enum {
 };
 pub fn cmdBeginRenderingToWindow(cmd: *VKCommandBuffer, window_ctx: *VKWindowContext, clear_value: ClearValue) void {
     huge.dassert(cmd.queue_type == .graphics);
+    if (!cmd.state.recording) return;
 
     if (cmd.state.rendering or !cmd.state.recording) return;
     const current_cmd = cmd.handles[fif_index];
@@ -185,8 +339,9 @@ pub const ClearValue = struct {
 /// submitting it to the presentation queue
 pub fn present(cmd: *VKCommandBuffer, window_ctx: *VKWindowContext) Error!void {
     huge.dassert(cmd.queue_type == .presentation or cmd.queue_type == .graphics);
-
     if (!cmd.state.recording) return;
+
+    cmdEndRendering(cmd);
 
     if (qfi(.presentation) != qfi(.graphics)) {
         @panic("submit graphics first then start recording into new cmd");
@@ -197,8 +352,6 @@ pub fn present(cmd: *VKCommandBuffer, window_ctx: *VKWindowContext) Error!void {
         return Error.SwapchainImageNotAcquired;
 
     defer window_ctx.acquired_image_index = ~@as(u32, 0);
-
-    cmdEndRendering(cmd);
 
     device.cmdPipelineBarrier2(current_cmd, &.{
         // vk.DependencyFlags = .{},
@@ -303,6 +456,7 @@ pub const VKCommandBuffer = struct {
     queue_type: QueueType,
 
     state: CommandBufferState = .{},
+    dynamic_state: DynamicStateConfig = .{},
 
     pub fn begin(self: *VKCommandBuffer) Error!void {
         if (self.state.recording) return;
@@ -313,13 +467,17 @@ pub const VKCommandBuffer = struct {
         if (!self.state.recording) return;
         cmdEndRendering(self);
         device.endCommandBuffer(self.handles[fif_index]) catch |err| return wrapMemoryErrors(err);
+
         self.state = .{};
+        self.dynamic_state = .{};
     }
     const CommandBufferState = packed struct {
         recording: bool = false,
         rendering: bool = false,
         bound_pipeline: vk.Pipeline = .null_handle,
+        dynamic_state_set: DynamicStateSet = .{},
     };
+    const DynamicStateSet = util.FlagStructFromUnion(DynamicState, false);
 };
 
 fn getCommandPool(thread_id: ThreadID, queue_type: QueueType) Error!vk.CommandPool {
@@ -376,8 +534,9 @@ pub fn init(allocator: Allocator, create_queue_configuration: QueueConfiguration
     );
 
     physical_device_memory_properties = instance.getPhysicalDeviceMemoryProperties(pd().handle);
+    physical_device_limits = instance.getPhysicalDeviceProperties(pd().handle).limits;
+
     try vkinit.initLogicalDeviceAndQueues(layers, device_extension_list.items, create_queue_configuration);
-    pr("{f}\n", .{pd()});
 
     shader_error_writer = std.fs.File.stdout().writer(&shader_error_writer_buffer);
     shader_compiler = .new(arena.allocator(), &shader_error_writer.interface, .{
@@ -447,8 +606,34 @@ pub const queue_type_count = util.enumLen(QueueType);
 pub const QueueConfiguration = util.StructFromEnum(QueueType, bool, false, .@"packed");
 pub const QueueType = enum(u8) { graphics, presentation, compute, transfer, sparse_binding, video_decode, video_encode };
 pub const QFI = u8;
-fn wrapMemoryErrors(err: anyerror) Error {
+pub fn wrapMemoryErrors(err: anyerror) Error {
     return if (err == error.OutOfDeviceMemory) Error.OutOfDeviceMemory else Error.OutOfMemory;
+}
+fn castCompareOp(compare_op: CompareOp) vk.CompareOp {
+    return switch (compare_op) {
+        .never => .never,
+        .always => .always,
+
+        .equal => .equal,
+        .not_equal => .not_equal,
+
+        .less => .less,
+        .less_eql => .less_or_equal,
+        .greater => .greater,
+        .greater_eql => .greater_or_equal,
+    };
+}
+fn castPrimitiveTopology(primitive_topology: PrimitiveTopology) vk.PrimitiveTopology {
+    return switch (primitive_topology) {
+        .point => .point_list,
+
+        .line => .line_list,
+        .line_strip => .line_strip,
+
+        .triangle => .triangle_list,
+        .triangle_strip => .triangle_strip,
+        .triangle_fan => .triangle_fan,
+    };
 }
 
 pub const loader = &struct {
@@ -463,10 +648,11 @@ const Allocator = std.mem.Allocator;
 const List = std.ArrayList;
 pub const VKPipeline = @import("VKPipeline.zig");
 pub const VKWindowContext = @import("VKWindowContext.zig");
-const MemoryHeap = vulkan_alloc.MemoryHeap;
-const MemoryFlags = vulkan_alloc.MemoryFlags;
-const DeviceAllocation = vulkan_alloc.DeviceAllocation;
-const allocateDeviceMemory = vulkan_alloc.allocateDeviceMemory;
+pub const VKBuffer = @import("VKBuffer.zig");
+pub const MemoryHeap = vulkan_alloc.MemoryHeap;
+pub const MemoryFlags = vulkan_alloc.MemoryFlags;
+pub const DeviceAllocation = vulkan_alloc.DeviceAllocation;
+pub const allocateDeviceMemory = vulkan_alloc.allocateDeviceMemory;
 
 pub const Error = error{
     InitializationFailure,
@@ -485,4 +671,9 @@ pub const Error = error{
 
     SwapchainImageNotAcquired,
     PresentationError,
+
+    ShaderCompilationError,
+    MissingShaderEntryPoint,
+    WrongShaderEntryPointType,
+    PipelineStageIOMismatch,
 };

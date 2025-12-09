@@ -36,6 +36,53 @@ pub fn structFieldIndexFromName(Struct: type, comptime name: []const u8) usize {
 pub fn enumLen(Enum: type) usize {
     return @typeInfo(Enum).@"enum".fields.len;
 }
+pub fn FlagStructFromUnion(Union: type, comptime default_value: bool) type {
+    const union_fields = @typeInfo(Union).@"union".fields;
+    var struct_field_names: [union_fields.len][]const u8 = undefined;
+    var struct_field_types: [union_fields.len]type = @splat(bool);
+    const struct_field_attributes: [union_fields.len]std.builtin.Type.StructField.Attributes = @splat(.{
+        .@"comptime" = false,
+        .@"align" = null,
+        .default_value_ptr = &default_value,
+    });
+    inline for (union_fields, 0..) |uf, i| {
+        struct_field_names[i] = uf.name;
+    }
+
+    return @Struct(
+        .@"packed",
+        null,
+        &struct_field_names,
+        &struct_field_types,
+        &struct_field_attributes,
+    );
+}
+pub fn StructFromUnion(Union: type, default_values: anytype) type {
+    const union_fields = @typeInfo(Union).@"union".fields;
+    var struct_field_names: [union_fields.len][]const u8 = undefined;
+    var struct_field_types: [union_fields.len]type = undefined;
+    var struct_field_attributes: [union_fields.len]std.builtin.Type.StructField.Attributes = undefined;
+    inline for (union_fields, 0..) |uf, i| {
+        struct_field_names[i] = uf.name;
+        struct_field_types[i] = uf.type;
+        struct_field_attributes[i] = .{
+            .@"comptime" = false,
+            .@"align" = @alignOf(uf.type),
+            .default_value_ptr = if (default_values.len == 0)
+                null
+            else
+                @ptrCast(&@as(uf.type, default_values[@min(i, default_values.len -| 1)])),
+        };
+    }
+
+    return @Struct(
+        .auto,
+        null,
+        &struct_field_names,
+        &struct_field_types,
+        &struct_field_attributes,
+    );
+}
 pub fn StructFromEnum(Enum: type, T: type, default_value: ?T, layout: std.builtin.Type.ContainerLayout) type {
     const em = @typeInfo(Enum).@"enum";
     var struct_field_names: [em.fields.len][]const u8 = undefined;

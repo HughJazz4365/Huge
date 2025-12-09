@@ -98,7 +98,8 @@ pub fn aspectRatio(self: Window) f32 {
 }
 pub fn size(self: Window) Size {
     var storage: math.cint2 = @splat(0);
-    glfw.getWindowSize(self.handle, &storage[0], &storage[1]);
+    glfw.getFramebufferSize(self.handle, &storage[0], &storage[1]);
+    // glfw.getWindowSize(self.handle, &storage[0], &storage[1]);
     return @intCast(storage);
 }
 // pub fn renderTarget(self: Window) huge.gpu.RenderTarget {
@@ -132,6 +133,7 @@ pub fn create(attributes: Attributes) Error!Window {
     };
     // if (huge.gpu.api() == .opengl) glfw.makeContextCurrent(window.handle);
     window.setAttributes(attributes);
+
     window.context = huge.vk.VKWindowContext.create(window) catch
         return Error.ContextCreationError;
 

@@ -16,6 +16,7 @@ pub const Camera = core.Camera;
 
 pub const name = "huge";
 pub const version: Version = .new(0, 0); //parse from zon;
+
 pub var initialized = false;
 
 pub fn dassert(ok: bool) void {

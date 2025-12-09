@@ -95,11 +95,12 @@ pub fn create(window: huge.Window) !WindowContext {
         _ = try vulkan.instance.getPhysicalDeviceSurfacePresentModesKHR(vulkan.pd().handle, result.surface, &present_mode_count, null);
         _ = try vulkan.instance.getPhysicalDeviceSurfacePresentModesKHR(vulkan.pd().handle, result.surface, &present_mode_count, &present_mode_storage);
         break :blk for (present_mode_storage[0..present_mode_count]) |pm| {
-            if (pm == vk.PresentModeKHR.mailbox_khr) break pm;
+            if (pm == vk.PresentModeKHR.mailbox_khr and huge.zigbuiltin.mode != .Debug) break pm;
         } else vk.PresentModeKHR.fifo_khr;
     };
 
-    result.image_count = @max(capabilities.min_image_count, @as(u32, if (result.present_mode == .mailbox_khr) 3 else 2));
+    result.image_count = @max(capabilities.min_image_count, 3);
+    // result.image_count = @max(capabilities.min_image_count, @as(u32, if (result.present_mode == .mailbox_khr) 3 else 3));
     const exclusive = vulkan.qfi(.graphics) == vulkan.qfi(.presentation);
     result.swapchain = try vulkan.device.createSwapchainKHR(&.{
         .surface = result.surface,

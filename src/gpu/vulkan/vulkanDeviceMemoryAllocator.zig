@@ -15,9 +15,9 @@ pub fn allocateDeviceMemory(
             break @intCast(i);
     } else return Error.OutOfDeviceMemory;
 
-    const heap: *MemoryHeap = for (vulkan.heaps.items) |*heap| {
+    const heap_index: usize = for (vulkan.heaps.items, 0..) |*heap, i| {
         if (heap.memory_type_index == memory_type_index and
-            heap.size - heap.consumed >= memory_requirements.size) break heap;
+            heap.size - heap.consumed >= memory_requirements.size) break i;
     } else blk: {
         try expandHeapsIfNeeded();
         const is_special = flags.host_coherent or flags.host_visible or flags.device_local;
@@ -36,16 +36,16 @@ pub fn allocateDeviceMemory(
             .size = allocation_size,
             .memory_type_index = memory_type_index,
         });
-        break :blk &vulkan.heaps.items[vulkan.heaps.items.len - 1];
+        break :blk vulkan.heaps.items.len - 1;
     };
-    const aligned_offset = util.rut(u64, heap.consumed, memory_requirements.alignment);
+    const aligned_offset = util.rut(u64, vulkan.heaps.items[heap_index].consumed, memory_requirements.alignment);
     std.debug.print("ALLOC: {d} KiB(+frag = {d} B)\n", .{
         @as(f64, @floatFromInt(memory_requirements.size)) / 1024.0,
-        aligned_offset - heap.consumed,
+        aligned_offset - vulkan.heaps.items[heap_index].consumed,
     });
-    heap.consumed = aligned_offset + memory_requirements.size;
+    vulkan.heaps.items[heap_index].consumed = aligned_offset + memory_requirements.size;
 
-    return .{ .device_memory = heap.device_memory, .offset = aligned_offset };
+    return .{ .heap_index = heap_index, .offset = aligned_offset };
 }
 fn expandHeapsIfNeeded() Error!void {
     if (vulkan.heaps.items.len == vulkan.heaps.capacity) {
@@ -59,7 +59,7 @@ fn expandHeapsIfNeeded() Error!void {
     }
 }
 pub const DeviceAllocation = struct {
-    device_memory: vk.DeviceMemory = .null_handle,
+    heap_index: usize,
     offset: u64 = 0,
 };
 pub const MemoryHeap = struct {
@@ -73,7 +73,7 @@ pub const MemoryHeap = struct {
     pub const general_size: u64 = 128 * MiB;
     pub const special_size: u64 = 64 * MiB;
 
-    const MiB = 1024 * 1024;
+    pub const MiB = 1024 * 1024;
 };
 
 pub const MemoryFlags = packed struct {

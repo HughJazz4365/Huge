@@ -1,7 +1,6 @@
-uniform ubo : @Buffer(struct{
-	member eye_pos: vec3
-	member inv_res: vec2
-}, .ubo)
+//descriptor(0, 0) ubo : @Buffer(struct{
+//	member eye_pos: vec3
+//}, .ubo)
 
 const vert = entrypoint(.vertex){
 	push vp, model : mat4
@@ -15,9 +14,7 @@ const vert = entrypoint(.vertex){
 
 const frag = entrypoint(.fragment){
 	in(.flat) normal, in world_pos: vec3
-	uniform tex : @Texture(f32, ._2d, true)
-	//const albedo : vec3 = .{1.0, 0.4, 0.1}
-	const albedo = tex.sample(@frag_coord.xy * ubo.inv_res).xyz
+	const albedo : vec3 = .{1.0, 0.4, 0.1}
 
 	//ubo start
 	const light_dir = |vec3{3, -9, 1}
@@ -26,7 +23,8 @@ const frag = entrypoint(.fragment){
 	const spec_intensity = 2
 	//ubo end
 
-	const view_dir = |(ubo.eye_pos - world_pos)
+	const view_dir = |(.{0} - world_pos)
+	//const view_dir = |(ubo.eye_pos - world_pos)
 	const diffuse = -light_dir *** normal
 
 	const specular = (@reflect(-light_dir, normal) *** view_dir) ^ spec_pow * spec_intensity  * diffuse

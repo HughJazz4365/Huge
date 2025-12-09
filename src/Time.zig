@@ -23,7 +23,7 @@ pub fn tick(self: *Time) void {
     self.avg_accumulator += self.frame_time;
     self.avg_frame_count += 1;
     if (self.avg_accumulator >= avg_threshold) {
-        self.avg_frame_time = ns2s64(self.avg_accumulator) / @as(f64, @floatFromInt(self.avg_frame_count));
+        self.avg_frame_time = ns2s64(self.avg_accumulator) / @as(f64, @floatFromInt(self.avg_frame_count + 1));
         self.avg_frame_count = 0;
         self.avg_accumulator = 0;
     }
