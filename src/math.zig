@@ -26,6 +26,27 @@ pub const euler = vec3;
 pub const mat = [4]vec4;
 pub const CoordinateSystem = enum { right_handed, left_handed };
 
+pub fn cast(T: type, num: anytype) T {
+    const F = @TypeOf(num);
+    const finfo, const tinfo = .{ @typeInfo(F), @typeInfo(T) };
+    return if (finfo == .vector and tinfo == .vector) //
+        (if (finfo.vector.len == tinfo.vector.len)
+            scalarCast(T, num)
+        else
+            vectorCast(T, num))
+    else if (tinfo == .vector and isScalar(finfo))
+        @splat(scalarCast(tinfo.vector.child, num))
+    else if (isScalar(tinfo) and finfo == .vector)
+        scalarCast(T, num[0])
+    else if (isScalar(tinfo) and isScalar(finfo))
+        scalarCast(T, num)
+    else
+        @compileError("cannot cast '" ++
+            @typeName(F) ++
+            "' into '" ++
+            @typeName(T) ++ "'");
+}
+
 pub fn mul(l: anytype, r: anytype) mulType(@TypeOf(l), @TypeOf(r)) {
     const L = @TypeOf(l);
     const R = @TypeOf(r);
@@ -51,19 +72,47 @@ pub fn identity(comptime T: type) T {
         else => @compileError("unexpected type - " ++ @typeName(T)),
     };
 }
+
+inline fn isScalar(comptime tinfo: std.builtin.Type) bool {
+    return tinfo == .int or tinfo == .float or tinfo == .comptime_int or tinfo == .comptime_float;
+}
+inline fn scalarCast(T: type, val: anytype) T {
+    const F = @TypeOf(val);
+    if (F == T) return val;
+    const finfo, const tinfo = if (@typeInfo(T) == .vector)
+        .{ @typeInfo(@typeInfo(F).vector.child), @typeInfo(@typeInfo(T).vector.child) }
+    else
+        .{ @typeInfo(F), @typeInfo(T) };
+    return if (tinfo == .int or tinfo == .comptime_int) ( //
+        if (finfo == .int or finfo == .comptime_int)
+            @intCast(val)
+        else
+            @intFromFloat(val)) else ( //
+        if (finfo == .int or finfo == .comptime_int)
+            @floatFromInt(val)
+        else
+            @floatCast(val));
+}
+
 //=======|vector|========
 
-pub fn vectorCast(comptime Target: type, v: anytype) Target {
-    const V = @TypeOf(v);
-    const vv, const tv = .{ @typeInfo(V).vector, @typeInfo(Target).vector };
-    huge.cassert(vv.child == tv.child);
-    var result: Target = @splat(0);
-    inline for (0..@min(tv.len, vv.len)) |i| result[i] = v[i];
-    return result;
+fn vectorCast(T: type, v: anytype) T {
+    const F = @TypeOf(v);
+    const finfo, const tinfo = .{ @typeInfo(F).vector, @typeInfo(T).vector };
+    return scalarCast(T, @shuffle(
+        finfo.child,
+        v,
+        @Vector(2, finfo.child){ 0, 0 },
+        blk: {
+            var m: @Vector(tinfo.len, i32) = @splat(-1);
+            for (0..@min(tinfo.len, finfo.len)) |i| m[i] = i;
+            break :blk m;
+        },
+    ));
 }
 pub fn normalized(v: anytype) @TypeOf(v) {
     const m = mag(v);
-    return if (m == 0) @splat(0) else v * @as(@TypeOf(v), @splat(1.0 / m));
+    return if (m == 0) @splat(0) else scale(v, 1.0 / m);
 }
 pub fn dot(a: anytype, b: anytype) @typeInfo(@TypeOf(a, b)).vector.child {
     return @reduce(.Add, a * b);
@@ -75,7 +124,7 @@ pub inline fn crossUp4(v: vec4) vec4 {
     return .{ v[2], 0, -v[0], 0 };
 }
 pub fn cross(a: anytype, b: anytype) @TypeOf(a, b) {
-    const st: Swizzle = comptime switch (@TypeOf(a)) {
+    const st: SwizzleLiteral = comptime switch (@TypeOf(a)) {
         vec4 => .yzxw,
         vec3 => .yzx,
         else => |T| @compileError("unexpected type - " ++ @typeName(T)),
@@ -94,59 +143,39 @@ pub inline fn one(comptime V: type) V {
 }
 pub const w1: vec4 = .{ 0, 0, 0, 1 };
 pub inline fn up(comptime V: type) V {
-    return comptime blk: {
-        var v: V = @splat(0);
-        if (@typeInfo(V).vector.len < 2) break :blk v;
-        v[1] = 1;
-        break :blk v;
-    };
+    return vectorCast(V, ivec2{ 0, 1 });
 }
 pub inline fn down(comptime V: type) V {
-    return comptime -up(V);
+    return vectorCast(V, ivec2{ 0, -1 });
 }
 pub inline fn forward(comptime V: type) V {
-    return comptime blk: {
-        var v: V = @splat(0);
-        if (@typeInfo(V).vector.len < 3) break :blk v;
-        v[2] = 1;
-        break :blk v;
-    };
+    return vectorCast(V, ivec3{ 0, 0, 1 });
 }
 pub inline fn backwards(comptime V: type) V {
-    return comptime -forward(V);
+    return vectorCast(V, ivec3{ 0, 0, -1 });
 }
 pub inline fn right(comptime V: type) V {
-    return comptime blk: {
-        var v: V = @splat(0);
-        if (@typeInfo(V).vector.len < 1) break :blk v;
-        v[0] = 1;
-        break :blk v;
-    };
+    return vectorCast(V, ivec2{ 1, 0 });
 }
 pub inline fn left(comptime V: type) V {
-    return comptime -right(V);
+    return vectorCast(V, ivec2{ -1, 0 });
 }
 
-pub const Swizzle = @TypeOf(._);
-pub fn swizzle(v: anytype, comptime s: Swizzle) SwizzleType(s, @TypeOf(v)) {
-    const S = SwizzleType(s, @TypeOf(v));
-    const tn = @tagName(s);
+pub const SwizzleLiteral = @TypeOf(._);
+pub fn swizzle(v: anytype, comptime s: SwizzleLiteral) SwizzleType(s, @TypeOf(v)) {
+    const sl = @tagName(s);
     const vector = @typeInfo(@TypeOf(v)).vector;
-    if (tn.len == 1) return swizzleElem(v, tn[0]);
-    //we use builtin shuffle function if we can
-    if (tn.len == vector.len and comptime !swizzleHasNumbers(s))
-        return @shuffle(vector.child, v, undefined, swizzleCharMask(vector.len, s));
-
-    var result: S = undefined;
-    inline for (tn, 0..) |c, i| result[i] = swizzleElem(v, c);
-    return result;
+    if (sl.len == 1) return swizzleElem(v, sl[0]);
+    return if (std.mem.countScalar(u8, sl, sl[0]) == sl.len)
+        @splat(swizzleElem(v, sl[0]))
+    else
+        @shuffle(
+            vector.child,
+            v,
+            @Vector(2, vector.child){ 0, 1 },
+            swizzleCharMask(s),
+        );
 }
-fn swizzleHasNumbers(comptime s: Swizzle) bool {
-    return for (@tagName(s)) |c| {
-        if (c == '0' or c == '1') break true;
-    } else false;
-}
-
 inline fn swizzleElem(v: anytype, comptime char: u8) @typeInfo(@TypeOf(v)).vector.child {
     return switch (char) {
         '0' => 0,
@@ -154,7 +183,8 @@ inline fn swizzleElem(v: anytype, comptime char: u8) @typeInfo(@TypeOf(v)).vecto
         else => v[comptime swizzleCharIndex(char)],
     };
 }
-fn swizzleCharMask(comptime len: comptime_int, comptime s: Swizzle) @Vector(len, i32) {
+fn swizzleCharMask(comptime s: SwizzleLiteral) @Vector(@tagName(s).len, i32) {
+    const len = @tagName(s).len;
     const I = @Vector(len, i32);
     var result: I = @splat(0);
     for (@tagName(s), 0..) |c, i| result[i] = swizzleCharIndex(c);
@@ -169,11 +199,12 @@ fn swizzleCharIndex(comptime char: u8) comptime_int {
         'g' => 1,
         'b' => 2,
         'a' => 3,
-        // '0', '1' => 'o','l', //special literals
+        '0' => -1,
+        '1' => -2,
         else => @compileError("invalid swizzle character"),
     };
 }
-fn SwizzleType(comptime s: Swizzle, comptime T: type) type {
+fn SwizzleType(comptime s: SwizzleLiteral, comptime T: type) type {
     const vector = @typeInfo(T).vector;
     const l = comptime @tagName(s).len;
     if (l == 1) return vector.child;
@@ -191,9 +222,11 @@ pub fn lerpMat(a: mat, b: mat, t: f32) mat {
     };
 }
 pub fn transpose(a: mat) mat {
-    _ = a;
-    @compileError("TODO");
-    // return a;
+    var result: mat = undefined;
+    inline for (0..4) |i| inline for (0..4) |j| {
+        result[i][j] = a[j][i];
+    };
+    return result;
 }
 pub fn mmMul(a: mat, b: mat) mat {
     return .{
@@ -210,15 +243,7 @@ pub fn mvMul(m: mat, v: vec4) vec4 {
         m[3] * @as(vec4, @splat(v[3]));
 }
 pub fn modelMat(t: vec3, r: quat, s: vec3) mat {
-    const x, const y, const z, const w = r;
-    if (true) return mmMul(mmMul(translationMat(t), rotationMat(r)), scaleMat(s));
-    //but manual
-    return mat{
-        .{ (1 - 2 * (y * y + z * z)) * s[0], 2 * (x * y - z * w), 2 * (x * z + y * w), 0 },
-        .{ 2 * (x * y + z * w), (1 - 2 * (x * x + z * z)) * s[1], 2 * (y * z - x * w), 0 },
-        .{ 2 * (x * z - y * w), 2 * (y * z + x * w), (1 - 2 * (x * x + y * y)) * s[2], 0 },
-        .{ t[0], t[1], t[2], 1 },
-    };
+    return mmMul(mmMul(translationMat(t), rotationMat(r)), scaleMat(s));
 }
 pub fn scaleMat(s: vec3) mat {
     return mat{
@@ -272,12 +297,12 @@ pub fn viewMatRh(pos: vec3, look_dir: vec3) mat {
 }
 pub fn viewMatTransposedRh(pos: vec3, look_dir: vec3) mat {
     var result: mat = undefined;
-    result[2] = vectorCast(vec4, -look_dir);
+    result[2] = swizzle(-look_dir, .xyz0);
     result[0] = normalized(crossUp4(result[2]));
     result[1] = normalized(cross(result[2], result[0]));
     result[3] = identity(quat);
     inline for (0..3) |i|
-        result[i][3] = -dot(vectorCast(vec3, result[i]), pos);
+        result[i][3] = -dot(swizzle(result[i], .xyz), pos);
     return result;
 }
 pub const identityMat: mat = .{
@@ -303,9 +328,9 @@ pub fn rotateVector(v: vec3, q: quat) vec3 {
 }
 
 pub fn quatFromAxisAngle(axis: vec3, angle: f32) quat {
-    const a = angle * 0.5;
-    const sc: vec2 = vec2{ @sin(a), @cos(a) };
-    return swizzle(axis, .xyz1) * swizzle(sc, .xxxy);
+    const half = angle * 0.5;
+    return swizzle(axis, .xyz1) *
+        swizzle(vec2{ @sin(half), @cos(half) }, .xxxy);
 }
 pub fn quatFromEuler(radians: euler) quat {
     const half = scale(radians, 0.5);

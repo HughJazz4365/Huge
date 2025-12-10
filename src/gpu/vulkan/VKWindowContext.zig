@@ -29,7 +29,9 @@ submit_semaphores: [mic]vk.Semaphore = @splat(.null_handle),
 fences: [mfif]vk.Fence = @splat(.null_handle),
 
 inline fn fif(self: WindowContext) u32 {
-    return @max(@max(self.image_count, 1) - 1, 1);
+    _ = self;
+    return mfif;
+    // @max(@max(self.image_count, 1) - 1, 1);
 }
 pub fn startFrame(self: *WindowContext) Error!void {
     //INCREMENT FIF INDEX
@@ -99,12 +101,10 @@ pub fn create(window: huge.Window) !WindowContext {
         } else vk.PresentModeKHR.fifo_khr;
     };
 
-    result.image_count = @max(capabilities.min_image_count, 3);
-    // result.image_count = @max(capabilities.min_image_count, @as(u32, if (result.present_mode == .mailbox_khr) 3 else 3));
     const exclusive = vulkan.qfi(.graphics) == vulkan.qfi(.presentation);
     result.swapchain = try vulkan.device.createSwapchainKHR(&.{
         .surface = result.surface,
-        .min_image_count = result.image_count,
+        .min_image_count = @max(capabilities.min_image_count, @as(u32, if (result.present_mode == .mailbox_khr) 3 else 2)),
 
         .present_mode = result.present_mode,
         .image_format = result.surface_format.format,

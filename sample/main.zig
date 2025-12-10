@@ -34,18 +34,30 @@ pub fn main() !void {
         .scale = .{ 2.5, 1, 2 },
     };
 
-    var vertex_buffer: vk.VKBuffer = try .createValue(&cube.vertices, .{ .vertex = true }, .{});
-    var index_buffer: vk.VKBuffer = try .createValue(&cube.indices, .{ .index = true }, .{});
-    var mvp_buffer: vk.VKBuffer = try .create(@sizeOf(math.mat) * 2, .{ .storage = true }, .{
-        .host_visible = true,
-        .host_coherent = true,
-    });
+    var vertex_buffer: vk.VKBuffer = try .createValue(&cube.vertices, .{ .vertex = true }, .map);
+    var index_buffer: vk.VKBuffer = try .createValue(&cube.indices, .{ .index = true }, .map);
+    var mvp_buffer: vk.VKBuffer = try .create(@sizeOf(math.mat) * 2, .{ .storage = true }, .persistent_small);
     const mvp_mapping: []math.mat = @ptrCast(@alignCast(try mvp_buffer.map(0)));
 
-    // var texture : vk.VKTexture =
+    //2x2 image: |purple| green|
+    //           |red   | blue |
+    const test_texture_bytes = [_]u8{
+        156, 39,  176, 255,
+        0,   244, 92,  255,
+        255, 0,   0,   255,
+        3,   81,  244, 255,
+    };
+    // _ = test_texture_bytes;
+    var test_texture: vk.VKTexture = try .create(
+        .{ .@"2d" = @splat(2) },
+        .rgba8_norm,
+        .{ .tiling = @splat(.repeat) },
+        .{ .transfer_dst = true },
+    );
+    try test_texture.load(&test_texture_bytes);
 
     var euler: math.vec3 = @splat(0);
-    try vk.updateDescriptorSet(&.{&mvp_buffer}, &.{}, &.{});
+    try vk.updateDescriptorSet(&.{&mvp_buffer}, &.{}, &.{&test_texture});
     while (window.tick()) {
         //game update
         const speed = 5;
@@ -57,7 +69,6 @@ pub fn main() !void {
 
         cube_transform.rotation = math.quatFromEuler(.{ 0, huge.time.seconds(), 0 });
 
-        //write into persistently mapped buffer
         mvp_mapping[0] = camera.viewProjectionMat();
         mvp_mapping[1] = cube_transform.modelMat();
 
@@ -74,7 +85,8 @@ pub fn main() !void {
         });
 
         vk.cmdPushConstantsStruct(&cmd, pipeline, .{
-            .mvp_id = mvp_buffer.descriptor_id,
+            .mvp_id = mvp_buffer,
+            .tex_id = test_texture,
             .eye_pos = camera_transform.position,
         });
         vk.cmdBindIndexBuffer(&cmd, &index_buffer, 0, .u16);

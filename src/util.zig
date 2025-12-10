@@ -2,6 +2,10 @@ const std = @import("std");
 const huge = @import("root.zig");
 const math = huge.math;
 
+pub const KiB = 1024;
+pub const MiB = KiB * 1024;
+pub const GiB = MiB * 1024;
+
 pub fn rut(T: type, a: T, b: T) T {
     if (@typeInfo(T) != .int)
         @compileError("rut: T must be integer and not " ++ @typeName(T));
@@ -35,6 +39,9 @@ pub fn structFieldIndexFromName(Struct: type, comptime name: []const u8) usize {
 }
 pub fn enumLen(Enum: type) usize {
     return @typeInfo(Enum).@"enum".fields.len;
+}
+pub fn BackingInt(Struct: type) type {
+    return @typeInfo(Struct).@"struct".backing_integer.?;
 }
 pub fn FlagStructFromUnion(Union: type, comptime default_value: bool) type {
     const union_fields = @typeInfo(Union).@"union".fields;

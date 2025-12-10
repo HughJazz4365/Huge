@@ -1,6 +1,6 @@
-const gpu = @import("../../root.zig").gpu;
+const vulkan = @import("vulkan.zig");
 const vk = @import("vk.zig");
-pub fn compatibleFormats(format: gpu.Format) []const vk.Format {
+pub fn compatibleFormats(format: vulkan.Format) []const vk.Format {
     _ = vk.Format;
     return switch (format) {
         .rgba8_norm => //
@@ -241,7 +241,7 @@ pub fn mask(vk_format: vk.Format) Mask {
         },
     };
 }
-pub fn formatSize(format: vk.Format) [2]u32 {
+pub fn formatTexelSize(format: vk.Format) [2]u32 {
     return switch (format) {
         .undefined => .{ 0, 1 },
         .r4g4_unorm_pack8,
@@ -407,5 +407,6 @@ pub fn formatSize(format: vk.Format) [2]u32 {
         .bc7_unorm_block,
         .bc7_srgb_block,
         => .{ 1, 1 },
+        else => .{ 1, 1 },
     };
 }

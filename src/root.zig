@@ -22,7 +22,7 @@ pub var initialized = false;
 pub fn dassert(ok: bool) void {
     if (zigbuiltin.mode == .Debug and !ok) @panic("ASSERTION FAILED");
 }
-pub fn cassert(comptime condition: bool) void {
+pub inline fn cassert(comptime condition: bool) void {
     if (!condition) @compileError("comptime assertion failed");
 }
 pub fn init() !void {

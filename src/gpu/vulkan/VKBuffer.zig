@@ -11,21 +11,18 @@ allocation: vulkan.DeviceAllocation,
 size: u64 = 0,
 
 usage: BufferUsage = .{},
-mapping: ?[*]u8 = null,
-
 descriptor_id: vulkan.DescriptorID = .null,
 
 pub fn createValue(
     value: anytype,
     usage: BufferUsage,
-    memory_flags: vulkan.MemoryFlags,
+    memory_type: vulkan.MemoryType,
 ) Error!VKBuffer {
     const tinfo = @typeInfo(@TypeOf(value));
     const T = if (tinfo == .pointer) tinfo.pointer.child else @TypeOf(value);
     const size: u64 = @sizeOf(T);
-    var mem_flags = memory_flags;
-    mem_flags.add(.{ .host_visible = true });
-    var buffer: VKBuffer = try .create(size, usage, mem_flags);
+    if (!memory_type.mappable()) return Error.IncompatibleMemoryType;
+    var buffer: VKBuffer = try .create(size, usage, memory_type);
     try buffer.load(value, 0);
     return buffer;
 }
@@ -41,32 +38,16 @@ pub fn loadBytes(self: *VKBuffer, bytes: []const u8, offset: u64) Error!void {
     self.unmap();
 }
 pub fn map(self: *VKBuffer, offset: u64) Error![]u8 {
-    if (self.mapping) |m| return m[0..self.size];
-
-    huge.dassert(vulkan.heaps.items[self.allocation.heap_index].memory_flags.host_visible);
-    const ptr: [*]u8 = @ptrCast((vulkan.device.mapMemory(
-        vulkan.heaps.items[self.allocation.heap_index].device_memory,
-        self.allocation.offset + offset,
-        self.size,
-        .{},
-    ) catch |err| return switch (err) {
-        error.MemoryMapFailed => Error.MemoryMapFailed,
-        error.OutOfDeviceMemory => Error.OutOfDeviceMemory,
-        else => Error.OutOfMemory,
-    }) orelse return Error.MemoryMapFailed);
-    self.mapping = ptr;
-
-    return ptr[0..self.size];
+    return try vulkan.device_allocator.map(self.allocation, offset, self.size);
 }
 pub fn unmap(self: *VKBuffer) void {
-    if (self.mapping) |_|
-        vulkan.device.unmapMemory(vulkan.heaps.items[self.allocation.heap_index].device_memory);
+    return vulkan.device_allocator.unmap(self.allocation);
 }
 
 pub fn create(
     size: u64,
     usage: BufferUsage,
-    memory_flags: vulkan.MemoryFlags,
+    memory_type: vulkan.MemoryType,
 ) Error!VKBuffer {
     const handle = vulkan.device.createBuffer(&.{
         .flags = .{},
@@ -78,13 +59,9 @@ pub fn create(
 
     const allocation = try vulkan.allocateDeviceMemory(
         vulkan.device.getBufferMemoryRequirements(handle),
-        memory_flags,
+        memory_type,
     );
-    vulkan.device.bindBufferMemory(
-        handle,
-        vulkan.heaps.items[allocation.heap_index].device_memory,
-        allocation.offset,
-    ) catch |err| return vulkan.wrapMemoryErrors(err);
+    try vulkan.device_allocator.bind(.{ .buffer = handle }, allocation, 0);
     return .{
         .handle = handle,
         .size = size,
@@ -93,15 +70,15 @@ pub fn create(
     };
 }
 
-pub const BufferUsage = packed struct {
-    transfer_src: bool = false,
-    transfer_dst: bool = false,
-    storage: bool = false,
-    uniform: bool = false,
-    index: bool = false,
-    vertex: bool = false,
-    indirect: bool = false,
-};
+pub const BufferUsage = util.StructFromEnum(enum {
+    transfer_src,
+    transfer_dst,
+    storage,
+    uniform,
+    index,
+    vertex,
+    indirect,
+}, bool, false, .@"packed");
 fn castBufferUsage(usage: BufferUsage) vk.BufferUsageFlags {
     return .{
         .transfer_src_bit = usage.transfer_src,
