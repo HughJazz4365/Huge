@@ -156,7 +156,7 @@ pub fn initLogicalDeviceAndQueues(layers: Names, extensions: Names, create_queue
         vulkan.pd().handle,
         &device_create_info,
         vulkan.vka,
-    ) catch return Error.DeviceInitializationFailure;
+    ) catch return Error.InitializationFailure;
     vulkan.dwp = .load(device_handle, vulkan.instance.wrapper.dispatch.vkGetDeviceProcAddr.?);
     vulkan.device = .init(device_handle, &vulkan.dwp);
 
@@ -173,20 +173,20 @@ pub fn initPhysicalDevices(
 ) Error!usize {
     var count: u32 = 0;
     _ = vulkan.instance.enumeratePhysicalDevices(&count, null) catch
-        return Error.PhysicalDeviceInitializationFailure;
+        return Error.InitializationFailure;
 
     if (count == 0) return Error.NoCompatiblePhysicalDevices;
 
     count = @min(vulkan.physical_devices.len, count);
     var physical_device_handles: [vulkan.physical_devices.len]vk.PhysicalDevice = undefined;
     _ = vulkan.instance.enumeratePhysicalDevices(&count, &physical_device_handles) catch
-        return Error.PhysicalDeviceInitializationFailure;
+        return Error.InitializationFailure;
     for (&vulkan.physical_devices, &physical_device_handles) |*p, *ph| p.handle = ph.*;
 
     // create dummy window to use its surface
     // for physical device initialization
     const dummy_window = huge.Window.createDummy(@intFromEnum(vulkan.instance.handle)) catch
-        return Error.DummyWindowCreationFailure;
+        return Error.InitializationFailure;
     defer {
         vulkan.instance.destroySurfaceKHR(@enumFromInt(dummy_window.surface_handle), vulkan.vka);
         glfw.destroyWindow(dummy_window.handle);
@@ -303,7 +303,7 @@ fn getQueueFamilyIndices(
         vulkan.QueueConfiguration,
         any_flags,
         minimal_queue_configuration,
-    )) return Error.PhysicalDeviceInitializationFailure;
+    )) return Error.InitializationFailure;
 
     //iterate through all the possible queue configurations score them and use the best one
     var non_empty_index_storage: [vulkan.queue_type_count]usize = undefined;
@@ -446,14 +446,14 @@ fn checkExtensionPresence(required: Names, available: []const vk.ExtensionProper
     for (required) |re| { //check for unavailable instance extensions
         if (!for (available) |ae| {
             if (huge.util.strEqlNullTerm(re, @ptrCast(@alignCast(&ae.extension_name)))) break true;
-        } else false) return Error.UnavailableExtension; //TODO: log missing extension name
+        } else false) return Error.InitializationFailure; //TODO: log missing extension name
     }
 }
 fn checkLayerPresence(required: Names, available: []const vk.LayerProperties) Error!void {
     for (required) |rl| { //check for unavailable instance extensions
         if (!for (available) |al| {
             if (huge.util.strEqlNullTerm(rl, @ptrCast(@alignCast(&al.layer_name)))) break true;
-        } else false) return Error.UnavailableLayer; //TODO: log missing layer name
+        } else false) return Error.InitializationFailure; //TODO: log missing layer name
     }
 }
 

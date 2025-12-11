@@ -46,8 +46,7 @@ pub fn disableCursor(self: *const Window) void {
 pub fn getCursorDeltaNormalized(self: *const Window) math.vec2 {
     const aspect = self.aspectRatio();
     const factor = math.vec2{ aspect, -1 } / @as(math.vec2, @floatFromInt(self.size()));
-    return (self.cursor_pos - self.last_cursor_pos) *
-        math.scale(factor, huge.time.delta());
+    return (self.cursor_pos - self.last_cursor_pos) * factor;
 }
 
 fn getCursorPosRaw(self: *const Window) math.vec2 {

@@ -6,16 +6,15 @@ const vk = @import("vk.zig");
 
 const DeviceAllocator = @This();
 
-const base_block_size = 128 * util.MiB;
-const persistent_block_size = 4 * util.MiB;
-const persistent_urgent_block_size = 256 * util.KiB;
+const base_block_size: u64 = 128 * util.MiB;
+const persistent_block_size: u64 = 512 * util.KiB;
 
 const stack_block_count = (4 * util.GiB) / base_block_size;
 
 var stack_blocks: [stack_block_count]MemoryBlock = undefined;
 var capacity: usize = stack_block_count;
 
-var blocks: []MemoryBlock = stack_blocks[0..0];
+pub var blocks: []MemoryBlock = stack_blocks[0..0];
 pub fn bind(handle: union(enum) {
     buffer: vk.Buffer,
     image: vk.Image,
@@ -33,7 +32,7 @@ pub fn map(allocation: DeviceAllocation, offset: u64, size: u64) Error![]u8 {
     const off = allocation.offset + offset;
     const block = &blocks[allocation.block_index];
     if (block.map_counts == 0) {
-        if (block.type == .persistent or block.type == .persistent_small) {
+        if (block.type == .persistent) {
             block.mapping = try mapDeviceMemory(block.device_memory, 0, block.size);
             block.map_counts = 1;
             return block.mapping[off .. off + size];
@@ -42,10 +41,16 @@ pub fn map(allocation: DeviceAllocation, offset: u64, size: u64) Error![]u8 {
             block.map_counts = 1;
             return block.mapping;
         }
-    } else if (block.type == .persistent or block.type == .persistent_small) {
+    } else if (block.type == .persistent) {
         block.map_counts += 1;
         return block.mapping[off .. off + size];
-    } else return Error.MemoryMapFailed;
+    } else {
+        //scary
+        unmap(allocation);
+        block.mapping = try mapDeviceMemory(block.device_memory, off, size);
+        block.map_counts += 1;
+        return block.mapping;
+    }
 }
 pub fn unmap(allocation: DeviceAllocation) void {
     if (blocks[allocation.block_index].map_counts == 0) return;
@@ -141,18 +146,13 @@ pub const MemoryType = enum {
     device_only, //must be lazily allocated
     map, //must be host visible
     persistent, //host coherent
-    persistent_small, //host coherent, in its own allocation
 
     pub inline fn mappable(self: MemoryType) bool {
         return self != .regular and self != .device_only;
     }
 
     pub fn blockSize(self: MemoryType) usize {
-        return switch (self) {
-            .persistent => persistent_block_size,
-            .persistent_small => persistent_urgent_block_size,
-            else => base_block_size,
-        };
+        return if (self == .persistent) persistent_block_size else base_block_size;
     }
     /// if <0 - compatible
     /// if >=0 - compalible
@@ -162,7 +162,7 @@ pub const MemoryType = enum {
                 @as(i32, @intFromBool(flags.lazily_allocated_bit)) * 2,
             .device_only => @as(i32, @intFromBool(flags.lazily_allocated_bit)) * 2 - 1,
             .map => @as(i32, @intFromBool(flags.host_visible_bit)),
-            .persistent, .persistent_small => @as(i32, @intFromBool(flags.host_coherent_bit)),
+            .persistent => @as(i32, @intFromBool(flags.host_coherent_bit)),
         };
     }
 };

@@ -7,6 +7,7 @@ pub const math = @import("math.zig");
 pub const vk = @import("gpu/vulkan/vulkan.zig");
 pub const rend = @import("gpu/rendering.zig");
 pub const util = @import("util.zig");
+pub const asset = @import("asset/asset.zig");
 
 pub const Time = @import("Time.zig");
 pub var time: Time = .{}; //global time

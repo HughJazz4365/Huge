@@ -14,7 +14,7 @@ pub fn main() !void {
     huge.Time.avg_threshold = 5 * std.time.ns_per_s;
 
     var window: huge.Window =
-        try .create(.{ .title = "sample#0", .size = .{ 800, 600 } });
+        try .create(.{ .title = "sample#0", .size = huge.Window.HD });
     defer window.close();
     window.disableCursor();
 
@@ -36,7 +36,7 @@ pub fn main() !void {
 
     var vertex_buffer: vk.VKBuffer = try .createValue(&cube.vertices, .{ .vertex = true }, .map);
     var index_buffer: vk.VKBuffer = try .createValue(&cube.indices, .{ .index = true }, .map);
-    var mvp_buffer: vk.VKBuffer = try .create(@sizeOf(math.mat) * 2, .{ .storage = true }, .persistent_small);
+    var mvp_buffer: vk.VKBuffer = try .create(@sizeOf(math.mat) * 2, .{ .storage = true }, .persistent);
     const mvp_mapping: []math.mat = @ptrCast(@alignCast(try mvp_buffer.map(0)));
 
     //2x2 image: |purple| green|
@@ -48,26 +48,33 @@ pub fn main() !void {
         3,   81,  244, 255,
     };
     // _ = test_texture_bytes;
+
     var test_texture: vk.VKTexture = try .create(
-        .{ .@"2d" = @splat(2) },
+        .{ .@"2d" = @splat(16) },
         .rgba8_norm,
-        .{ .tiling = @splat(.repeat) },
+        .{ .tiling = @splat(.repeat), .expand = .linear },
         .{ .transfer_dst = true },
     );
-    try test_texture.load(&test_texture_bytes);
+    _ = &test_texture_bytes;
+    try test_texture.load(&testGradientTextureBytes(16, .{ 1, 0, 0, 1 }, .{ 0, 1, 0, 1 }));
 
     var euler: math.vec3 = @splat(0);
     try vk.updateDescriptorSet(&.{&mvp_buffer}, &.{}, &.{&test_texture});
+    var avg: f64 = 0;
     while (window.tick()) {
+        if (avg != huge.time.avg64()) {
+            avg = huge.time.avg64();
+            std.debug.print("[AVG] ms: {d:.4} | FPS: {d:.2}\n", .{ avg * 1000, 1.0 / avg });
+        }
         //game update
         const speed = 5;
-        const sensitivity = 400;
+        const sensitivity = 1;
 
         window.firstPersonCameraMovement(&euler, sensitivity);
         camera_transform.rotation = math.quatFromEuler(euler);
         camera_transform.position += math.scale(window.warsudVector(euler[1]), huge.time.delta() * speed);
 
-        cube_transform.rotation = math.quatFromEuler(.{ 0, huge.time.seconds(), 0 });
+        cube_transform.rotation = math.quatFromEuler(.{ 0, huge.time.seconds() * 0.3, 0 });
 
         mvp_mapping[0] = camera.viewProjectionMat();
         mvp_mapping[1] = cube_transform.modelMat();
@@ -77,7 +84,6 @@ pub fn main() !void {
         try cmd.begin();
 
         vk.cmdBeginRenderingToWindow(&cmd, &window.context, .{ .color = @splat(0.09) });
-        window.setAttributes(.{});
         vk.cmdSetDynamicStateConfig(&cmd, .{
             .viewport = .{ .size = @floatFromInt(window.size()) },
             .scissor = .{ .size = window.size() },
@@ -98,4 +104,19 @@ pub fn main() !void {
     }
 }
 
-// std.debug.print("[AVG] ms: {d:.4} | FPS: {d:.2}\n", .{ avg * 1000, 1.0 / avg });
+fn testGradientTextureBytes(comptime dim: usize, comptime a_color: math.vec4, comptime b_color: math.vec4) [dim * dim * 4]u8 {
+    var result: [dim * dim * 4]u8 = undefined;
+    for (0..dim) |x| {
+        for (0..dim) |y| {
+            const value = math.cast(f32, x + y) / math.cast(f32, dim + dim);
+            const c = math.scale(std.math.clamp(
+                std.math.lerp(a_color, b_color, math.cast(math.vec4, value)),
+                math.zero(math.vec4),
+                math.one(math.vec4),
+            ), 255);
+            const byte_vec = math.cast(@Vector(4, u8), c);
+            inline for (0..4) |i| result[(y * dim + x) * 4 + i] = byte_vec[i];
+        }
+    }
+    return result;
+}

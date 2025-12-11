@@ -964,11 +964,7 @@ pub const Error = error{
     UnsupportedApiVersion,
 
     UnavailableExtension,
-    UnavailableLayer,
-    PhysicalDeviceInitializationFailure,
     NoCompatiblePhysicalDevices,
-    DummyWindowCreationFailure,
-    DeviceInitializationFailure,
     WindowContextCreationError,
 
     OutOfMemory,

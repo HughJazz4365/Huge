@@ -21,7 +21,6 @@ pub fn createValue(
     const tinfo = @typeInfo(@TypeOf(value));
     const T = if (tinfo == .pointer) tinfo.pointer.child else @TypeOf(value);
     const size: u64 = @sizeOf(T);
-    if (!memory_type.mappable()) return Error.IncompatibleMemoryType;
     var buffer: VKBuffer = try .create(size, usage, memory_type);
     try buffer.load(value, 0);
     return buffer;
@@ -32,6 +31,11 @@ pub fn load(self: *VKBuffer, value: anytype, offset: u64) Error!void {
     try self.loadBytes(bytes, offset);
 }
 pub fn loadBytes(self: *VKBuffer, bytes: []const u8, offset: u64) Error!void {
+    const memory_type = vulkan.device_allocator.blocks[self.allocation.block_index].type;
+    if (memory_type == .regular or memory_type == .device_only)
+        @panic("TODO: load buffer through staging buffer if not mappable");
+
+    //fallback to staging buffer thing if map fails(already mapped etc)
     const mapped = try self.map(offset);
     const len = @min(mapped.len, bytes.len);
     @memcpy(mapped[0..len], bytes[0..len]);
