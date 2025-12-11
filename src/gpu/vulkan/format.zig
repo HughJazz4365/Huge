@@ -1,5 +1,54 @@
 const vulkan = @import("vulkan.zig");
 const vk = @import("vk.zig");
+pub fn componentMapping(vk_format: vk.Format) vk.ComponentMapping {
+    return switch (vk_format) {
+        .b4g4r4a4_unorm_pack16,
+        .b5g6r5_unorm_pack16,
+        .b5g5r5a1_unorm_pack16,
+        .b8g8r8_unorm,
+        .b8g8r8_snorm,
+        .b8g8r8_uscaled,
+        .b8g8r8_sscaled,
+        .b8g8r8_uint,
+        .b8g8r8_sint,
+        .b8g8r8_srgb,
+        .b8g8r8a8_unorm,
+        .b8g8r8a8_snorm,
+        .b8g8r8a8_uscaled,
+        .b8g8r8a8_sscaled,
+        .b8g8r8a8_uint,
+        .b8g8r8a8_sint,
+        .b8g8r8a8_srgb,
+        .b10g11r11_ufloat_pack32,
+        => .{ .r = .b, .g = .identity, .b = .r, .a = .identity },
+
+        .a8b8g8r8_unorm_pack32,
+        .a8b8g8r8_snorm_pack32,
+        .a8b8g8r8_uscaled_pack32,
+        .a8b8g8r8_sscaled_pack32,
+        .a8b8g8r8_uint_pack32,
+        .a8b8g8r8_sint_pack32,
+        .a8b8g8r8_srgb_pack32,
+        => .{ .r = .a, .g = .b, .b = .g, .a = .r },
+
+        .a1r5g5b5_unorm_pack16,
+        .a2r10g10b10_unorm_pack32,
+        .a2r10g10b10_snorm_pack32,
+        .a2r10g10b10_uscaled_pack32,
+        .a2r10g10b10_sscaled_pack32,
+        .a2r10g10b10_uint_pack32,
+        .a2r10g10b10_sint_pack32,
+        .a2b10g10r10_unorm_pack32,
+        .a2b10g10r10_snorm_pack32,
+        .a2b10g10r10_uscaled_pack32,
+        .a2b10g10r10_sscaled_pack32,
+        .a2b10g10r10_uint_pack32,
+        .a2b10g10r10_sint_pack32,
+        => .{ .r = .a, .g = .r, .b = .g, .a = .b },
+
+        else => .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+    };
+}
 pub fn compatibleFormats(format: vulkan.Format) []const vk.Format {
     _ = vk.Format;
     return switch (format) {
@@ -28,8 +77,8 @@ pub fn compatibleFormats(format: vulkan.Format) []const vk.Format {
             .b8g8r8a8_srgb,
             .a8b8g8r8_srgb_pack32,
 
-            .b8g8r8a8_unorm,
             .r8g8b8a8_unorm,
+            .b8g8r8a8_unorm,
             .a8b8g8r8_unorm_pack32,
         },
         .r8_norm => &.{

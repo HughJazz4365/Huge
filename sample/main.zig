@@ -39,24 +39,15 @@ pub fn main() !void {
     var mvp_buffer: vk.VKBuffer = try .create(@sizeOf(math.mat) * 2, .{ .storage = true }, .persistent);
     const mvp_mapping: []math.mat = @ptrCast(@alignCast(try mvp_buffer.map(0)));
 
-    //2x2 image: |purple| green|
-    //           |red   | blue |
-    const test_texture_bytes = [_]u8{
-        156, 39,  176, 255,
-        0,   244, 92,  255,
-        255, 0,   0,   255,
-        3,   81,  244, 255,
-    };
-    // _ = test_texture_bytes;
-
     var test_texture: vk.VKTexture = try .create(
-        .{ .@"2d" = @splat(16) },
+        .{ .@"2d" = @splat(8) },
+        // .{ .@"2d" = @splat(2) },
         .rgba8_norm,
-        .{ .tiling = @splat(.repeat), .expand = .linear },
+        .{ .tiling = @splat(.repeat), .expand = .point },
         .{ .transfer_dst = true },
     );
-    _ = &test_texture_bytes;
-    try test_texture.load(&testGradientTextureBytes(16, .{ 1, 0, 0, 1 }, .{ 0, 1, 0, 1 }));
+    // try test_texture.load(&huge.asset.texture.missing_texture_bytes);
+    try test_texture.load(&testGradientTextureBytes(8, .{ 1, 0, 0, 1 }, .{ 0, 1, 0, 1 }));
 
     var euler: math.vec3 = @splat(0);
     try vk.updateDescriptorSet(&.{&mvp_buffer}, &.{}, &.{&test_texture});
@@ -64,7 +55,8 @@ pub fn main() !void {
     while (window.tick()) {
         if (avg != huge.time.avg64()) {
             avg = huge.time.avg64();
-            std.debug.print("[AVG] ms: {d:.4} | FPS: {d:.2}\n", .{ avg * 1000, 1.0 / avg });
+            if (huge.zigbuiltin.mode != .Debug)
+                std.debug.print("[AVG] ms: {d:.4} | FPS: {d:.2}\n", .{ avg * 1000, 1.0 / avg });
         }
         //game update
         const speed = 5;

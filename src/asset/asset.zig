@@ -3,6 +3,8 @@ const huge = @import("../root.zig");
 const util = huge.util;
 const math = huge.math;
 
+pub const texture = @import("texture.zig");
+
 pub const Error = Allocator.Error || std.Io.Writer.Error || error{StreamTooLong};
 pub fn readFileAlloc(io: std.Io, allocator: Allocator, path: []const u8) []u8 {
     const file = std.Io.Dir.cwd().openFile(io, path, .{});

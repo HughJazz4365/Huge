@@ -180,7 +180,7 @@ pub fn create(
             .cube_array => .cube_array,
         },
         .format = vk_format,
-        .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+        .components = vulkan.frmt.componentMapping(vk_format),
         .subresource_range = .{
             .aspect_mask = .{
                 .color_bit = mask.color,
