@@ -1,3 +1,4 @@
+//remove all of that
 const std = @import("std");
 const huge = @import("root.zig");
 pub const glfw = @import("glfw");

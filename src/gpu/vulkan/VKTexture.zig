@@ -88,6 +88,7 @@ pub fn create(
     format: Format,
     sampling_options: ?TextureSamplingParameters,
     usage: TextureUsage,
+    component_mapping: ComponentMapping,
 ) Error!VKTexture {
     const size = dimensions.size();
     const texture_type = std.meta.activeTag(dimensions);
@@ -180,7 +181,7 @@ pub fn create(
             .cube_array => .cube_array,
         },
         .format = vk_format,
-        .components = vulkan.frmt.componentMapping(vk_format),
+        .components = getImageComponentMapping(component_mapping, vk_format),
         .subresource_range = .{
             .aspect_mask = .{
                 .color_bit = mask.color,
@@ -292,6 +293,29 @@ fn getImageUsageFlags(
         .depth_stencil_attachment_bit = texture_usage.attachment and format.isDepthStencil(),
     };
 }
-
+pub const ComponentSwizzle = enum(u2) { r, g, b, a };
+pub const ComponentMappingValue = packed struct(u8) {
+    r: ComponentSwizzle = .r,
+    g: ComponentSwizzle = .g,
+    b: ComponentSwizzle = .b,
+    a: ComponentSwizzle = .a,
+};
+pub const ComponentMapping = union(enum) {
+    identity,
+    value: ComponentMappingValue,
+    raw,
+};
+fn getImageComponentMapping(mapping: ComponentMapping, vk_format: vk.Format) vk.ComponentMapping {
+    return switch (mapping) {
+        .identity => vulkan.frmt.componentMapping(vk_format),
+        .raw => .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+        .value => |v| .{
+            .r = @enumFromInt(@intFromEnum(v.r) + 3),
+            .g = @enumFromInt(@intFromEnum(v.g) + 3),
+            .b = @enumFromInt(@intFromEnum(v.b) + 3),
+            .a = @enumFromInt(@intFromEnum(v.a) + 3),
+        },
+    };
+}
 const Error = vulkan.Error;
 const Format = vulkan.Format;

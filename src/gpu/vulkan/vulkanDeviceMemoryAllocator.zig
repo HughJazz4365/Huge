@@ -74,8 +74,11 @@ pub fn allocateDeviceMemory(requirements: vk.MemoryRequirements, memory_type: Me
         const score = memory_type.score(block.flags) *
             (@as(i32, @intFromBool(block.type == memory_type)) * 2 + 1);
         const fits = util.rut(u64, block.offset, requirements.alignment) + requirements.size <= block.size;
-        if (best_score >= score and fits and
-            (requirements.memory_type_bits & (@as(u32, 1) << block.memory_type_index)) != 0)
+        const is_memory_type_index_valid = ((requirements.memory_type_bits & (@as(u32, 1) << block.memory_type_index)) != 0);
+        if (score >= best_score and
+            fits and
+            is_memory_type_index_valid and
+            (block.type == .persistent) == (memory_type == .persistent))
         {
             best_score = score;
             index = i;
@@ -113,8 +116,8 @@ pub fn allocateDeviceMemory(requirements: vk.MemoryRequirements, memory_type: Me
         };
     }
     const aligned_offset = util.rut(u64, blocks[index].offset, requirements.alignment);
-    std.debug.print("[{d}]ALLOC: {d:.3} KiB/ {d:.3} KiB(HI: {d}, Off: {d} B, Pad: {d} B)\n", .{
-        blocks[index].memory_type_index,
+    std.debug.print("ALLOC({}): {d:.3} KiB/ {d:.3} KiB(HI: {d}, Off: {d} B, Pad: {d} B)\n", .{
+        memory_type,
         @as(f64, @floatFromInt(requirements.size)) / 1024.0,
         @as(f64, @floatFromInt(blocks[index].size)) / 1024.0,
         index,

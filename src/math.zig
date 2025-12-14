@@ -191,14 +191,16 @@ fn swizzleCharMask(comptime s: SwizzleLiteral) @Vector(@tagName(s).len, i32) {
     return result;
 }
 
-fn swizzleCharIndex(comptime char: u8) comptime_int {
+pub fn swizzleCharIndex(comptime char: u8) comptime_int {
     return switch (char) {
         'x'...'z' => char - 'x',
         'w' => 3,
+
         'r' => 0,
         'g' => 1,
         'b' => 2,
         'a' => 3,
+
         '0' => -1,
         '1' => -2,
         else => @compileError("invalid swizzle character"),

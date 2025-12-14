@@ -11,6 +11,7 @@ pub fn main() !void {
 
     try huge.init();
     defer huge.deinit();
+
     huge.Time.avg_threshold = 5 * std.time.ns_per_s;
 
     var window: huge.Window =
@@ -22,6 +23,7 @@ pub fn main() !void {
         .vertex = .{ .path = "shader.hgsl", .entry_point = "vert" },
         .fragment = .{ .path = "shader.hgsl", .entry_point = "frag" },
     } });
+
     var cmd = try vk.allocateCommandBuffer(.main, .graphics);
 
     var camera_transform: huge.Transform = .{ .position = .{ 0, 0, -5 } };
@@ -45,6 +47,7 @@ pub fn main() !void {
         .rgba8_norm,
         .{ .tiling = @splat(.repeat), .expand = .point },
         .{ .transfer_dst = true },
+        .identity,
     );
     // try test_texture.load(&huge.asset.texture.missing_texture_bytes);
     try test_texture.load(&testGradientTextureBytes(8, .{ 1, 0, 0, 1 }, .{ 0, 1, 0, 1 }));
@@ -52,11 +55,11 @@ pub fn main() !void {
     var euler: math.vec3 = @splat(0);
     try vk.updateDescriptorSet(&.{&mvp_buffer}, &.{}, &.{&test_texture});
     var avg: f64 = 0;
+
     while (window.tick()) {
-        if (avg != huge.time.avg64()) {
+        if (huge.zigbuiltin.mode != .Debug and avg != huge.time.avg64()) {
             avg = huge.time.avg64();
-            if (huge.zigbuiltin.mode != .Debug)
-                std.debug.print("[AVG] ms: {d:.4} | FPS: {d:.2}\n", .{ avg * 1000, 1.0 / avg });
+            std.debug.print("[AVG] ms: {d:.4} | FPS: {d:.2}\n", .{ avg * 1000, 1.0 / avg });
         }
         //game update
         const speed = 5;
